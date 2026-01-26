@@ -251,13 +251,15 @@ export class ObsSupervisor extends EventEmitter {
             this.obsPid = this.obsProcess?.pid || null;
             this.restartAttempts = 0;
             this.emit('obs-started');
+            this.startMonitoring();
             
-            // Give OBS time to initialize WebSocket server
-            this.log('Waiting for OBS to initialize...');
+            // Give OBS more time to initialize WebSocket server
+            // Windows typically needs 6-10 seconds for full WebSocket initialization
+            this.log('Waiting for OBS to initialize WebSocket server...');
             setTimeout(() => {
               this.log('OBS initialization wait complete');
               resolve();
-            }, 5000);
+            }, 8000);
           });
 
           this.obsProcess.on('error', (error) => {

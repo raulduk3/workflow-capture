@@ -11,7 +11,7 @@ export class ObsController extends EventEmitter {
   private obs: OBSWebSocket;
   private connected: boolean = false;
   private readonly port: number = 4455;
-  private readonly maxRetries: number = 10;
+  private readonly maxRetries: number = 15;
   private readonly retryInterval: number = 2000;
 
   constructor() {
@@ -39,6 +39,10 @@ export class ObsController extends EventEmitter {
   }
 
   public async connect(): Promise<boolean> {
+    // Initial delay to let OBS WebSocket server fully initialize
+    this.log('Waiting for WebSocket server to be ready...');
+    await this.delay(1000);
+    
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       this.log(`Connection attempt ${attempt}/${this.maxRetries}`);
 
