@@ -16,8 +16,12 @@ param(
     [switch]$SetAsDefault
 )
 
-$ErrorActionPreference = "Stop"
+# Use Continue for non-critical errors - we'll handle them explicitly
+$ErrorActionPreference = "Continue"
 $ProgressPreference = "SilentlyContinue"
+
+# Track if we had any warnings (non-fatal issues)
+$script:WarningsEncountered = $false
 
 # Configuration
 $OBS_VERSION = "30.2.3"
@@ -316,21 +320,18 @@ function Configure-OBSProfile {
     }
     
     # Get display information for canvas sizing
+    $canvasWidth = 1920
+    $canvasHeight = 1080
+    
     try {
         Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
-    } catch {
-        Write-Log "Failed to load System.Windows.Forms assembly: $_" "ERROR"
-        throw "Cannot detect display configuration. Ensure .NET Framework is installed."
-    }
-    
-    $screens = [System.Windows.Forms.Screen]::AllScreens
-    
-    # Validate we have at least one screen
-    if ($null -eq $screens -or $screens.Count -eq 0) {
-        Write-Log "No displays detected, using default 1920x1080" "WARNING"
-        $canvasWidth = 1920
-        $canvasHeight = 1080
-    } else {
+        $screens = [System.Windows.Forms.Screen]::AllScreens
+        
+        # Validate we have at least one screen
+        if ($null -eq $screens -or $screens.Count -eq 0) {
+            Write-Log "No displays detected, using default 1920x1080" "WARNING"
+            $script:WarningsEncountered = $true
+        } else {
         # Calculate total canvas size (virtual screen bounds)
         $minX = 0
         $minY = 0
@@ -351,11 +352,18 @@ function Configure-OBSProfile {
         # Sanity check canvas dimensions
         if ($canvasWidth -le 0 -or $canvasHeight -le 0) {
             Write-Log "Invalid canvas dimensions detected ($canvasWidth x $canvasHeight), using default 1920x1080" "WARNING"
+            $script:WarningsEncountered = $true
             $canvasWidth = 1920
             $canvasHeight = 1080
         }
         
         Write-Log "Detected $($screens.Count) display(s), canvas size: ${canvasWidth}x${canvasHeight}" "INFO"
+        }
+    } catch {
+        Write-Log "Failed to detect display configuration, using defaults: $_" "WARNING"
+        $script:WarningsEncountered = $true
+        $canvasWidth = 1920
+        $canvasHeight = 1080
     }
     
     # Normalize sessions path for OBS (use forward slashes for cross-platform compatibility in OBS)
@@ -449,17 +457,19 @@ function Configure-OBSSceneCollection {
     }
     
     # Get all monitors for multi-monitor capture
+    $screens = $null
     try {
-        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        $screens = [System.Windows.Forms.Screen]::AllScreens
     } catch {
-        # Already loaded in Configure-OBSProfile, this is fine
+        Write-Log "Failed to detect screens for scene collection: $_" "WARNING"
+        $script:WarningsEncountered = $true
     }
-    
-    $screens = [System.Windows.Forms.Screen]::AllScreens
     
     # Handle case where no screens are detected
     if ($null -eq $screens -or $screens.Count -eq 0) {
         Write-Log "No displays detected for scene collection, creating default single-monitor setup" "WARNING"
+        $script:WarningsEncountered = $true
         # Create a minimal scene with default values
         $screens = @(@{
             Bounds = @{
