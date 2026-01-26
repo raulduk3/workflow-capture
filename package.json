@@ -1,6 +1,6 @@
 {
   "name": "l7s-workflow-analyzer",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Screen recording workflow analyzer using OBS Studio",
   "main": "dist/main/index.js",
   "scripts": {
