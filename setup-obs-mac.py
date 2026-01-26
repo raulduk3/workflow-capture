@@ -98,6 +98,19 @@ def get_display_info():
             
         return displays, x_offset, max_height
 
+
+def remove_crash_sentinel():
+    """Remove the OBS crash sentinel to prevent safe mode dialog."""
+    import shutil
+    sentinel_path = os.path.join(OBS_APPDATA, ".sentinel")
+    if os.path.exists(sentinel_path):
+        try:
+            shutil.rmtree(sentinel_path)
+            print(f"Removed crash sentinel: {sentinel_path}")
+        except Exception as e:
+            print(f"Warning: Could not remove sentinel: {e}")
+
+
 def create_directories():
     """Create required directories."""
     dirs = [
@@ -413,6 +426,9 @@ def main():
     print("L7S Workflow Analyzer - OBS Configuration (macOS)")
     print("=" * 50)
     print()
+    
+    # Remove crash sentinel first to prevent safe mode dialog
+    remove_crash_sentinel()
     
     # Detect displays
     print("Detecting displays...")

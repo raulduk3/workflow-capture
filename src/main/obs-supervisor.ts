@@ -2,6 +2,7 @@ import { ChildProcess, spawn, exec, execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import * as path from 'path';
 import * as os from 'os';
+import * as fs from 'fs';
 
 export interface ObsSupervisorEvents {
   'obs-started': () => void;
@@ -40,6 +41,33 @@ export class ObsSupervisor extends EventEmitter {
       return '/Applications/OBS.app';
     } else {
       return '/usr/bin/obs';
+    }
+  }
+
+  /**
+   * Remove the OBS crash sentinel to prevent safe mode dialog
+   * OBS creates .sentinel directory when starting and removes it on clean shutdown
+   * If it exists on startup, OBS thinks it crashed and shows safe mode prompt
+   */
+  private removeCrashSentinel(): void {
+    const platform = os.platform();
+    let sentinelPath: string;
+    
+    if (platform === 'darwin') {
+      sentinelPath = path.join(os.homedir(), 'Library', 'Application Support', 'obs-studio', '.sentinel');
+    } else if (platform === 'win32') {
+      sentinelPath = path.join(process.env.APPDATA || '', 'obs-studio', '.sentinel');
+    } else {
+      sentinelPath = path.join(os.homedir(), '.config', 'obs-studio', '.sentinel');
+    }
+    
+    try {
+      if (fs.existsSync(sentinelPath)) {
+        fs.rmSync(sentinelPath, { recursive: true, force: true });
+        this.log(`Removed crash sentinel: ${sentinelPath}`);
+      }
+    } catch (error) {
+      this.log(`Failed to remove crash sentinel: ${error}`);
     }
   }
 
@@ -152,6 +180,9 @@ export class ObsSupervisor extends EventEmitter {
   }
 
   public async start(): Promise<void> {
+    // Remove crash sentinel to prevent safe mode dialog
+    this.removeCrashSentinel();
+    
     // Check if OBS is already running
     if (this.isObsRunning()) {
       this.log(`OBS already running with PID: ${this.obsPid}`);
