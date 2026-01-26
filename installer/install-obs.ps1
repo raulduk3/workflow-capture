@@ -888,14 +888,20 @@ function Main {
     }
     
     Write-Host ""
+    
+    # Return appropriate exit code
+    if ($script:WarningsEncountered) {
+        return 2  # Warnings but OK
+    }
+    return 0  # Success
 }
 
 # Run main with error handling
 try {
-    Main
-    exit 0
+    $result = Main
+    exit $result
 } catch {
     Write-Log "Installation failed: $_" "ERROR"
     Write-Log "Stack trace: $($_.ScriptStackTrace)" "ERROR"
-    exit 1
+    exit 1  # Fatal error
 }

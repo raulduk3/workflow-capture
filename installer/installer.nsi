@@ -141,9 +141,12 @@ ConfigureOBS:
     nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\setup\install-obs.ps1" -SetAsDefault'
     Pop $0
     
-    ${If} $0 != 0
-        DetailPrint "Warning: OBS configuration may have encountered issues (exit code: $0)"
-        MessageBox MB_OK|MB_ICONEXCLAMATION "OBS configuration encountered issues. You may need to configure OBS manually.$\r$\n$\r$\nThe application will still work, but please run the setup again if you experience issues."
+    ; Exit code 0 = success, 1 = fatal error, 2 = warnings but OK
+    ${If} $0 == 1
+        DetailPrint "Error: OBS configuration failed (exit code: $0)"
+        MessageBox MB_OK|MB_ICONEXCLAMATION "OBS configuration encountered a critical issue.$\r$\n$\r$\nPlease ensure OBS Studio is installed and try running the setup again."
+    ${ElseIf} $0 != 0
+        DetailPrint "OBS configuration completed with minor warnings (exit code: $0)"
     ${Else}
         DetailPrint "OBS configuration completed successfully!"
     ${EndIf}
