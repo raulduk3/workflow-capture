@@ -11,6 +11,7 @@
 param(
     [string]$InstallPath = "C:\Program Files\obs-studio",
     [string]$ProfileName = "L7S-ScreenCapture",
+    [string]$SessionsPath = "C:\BandaStudy\Sessions",
     [switch]$Force,
     [switch]$SetAsDefault
 )
@@ -24,6 +25,14 @@ $OBS_DOWNLOAD_URL = "https://github.com/obsproject/obs-studio/releases/download/
 $OBS_INSTALLER_PATH = "$env:TEMP\obs-studio-installer.exe"
 $OBS_APPDATA = "$env:APPDATA\obs-studio"
 $EXISTING_OBS_DETECTED = $false
+$MIN_INSTALLER_SIZE_BYTES = 50000000  # ~50MB minimum expected size
+$MIN_DISK_SPACE_MB = 500  # Minimum free space required
+
+function Test-Administrator {
+    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
 
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
@@ -78,27 +87,116 @@ function Backup-OBSConfig {
     return $null
 }
 
+function Test-NetworkConnectivity {
+    Write-Log "Checking network connectivity..." "INFO"
+    try {
+        $testUri = "https://github.com"
+        $response = Invoke-WebRequest -Uri $testUri -UseBasicParsing -Method Head -TimeoutSec 10
+        return $true
+    } catch {
+        Write-Log "Network connectivity check failed: $_" "WARNING"
+        return $false
+    }
+}
+
+function Test-DiskSpace {
+    param([string]$Path, [int]$RequiredMB)
+    try {
+        $drive = (Get-Item $Path -ErrorAction SilentlyContinue).PSDrive
+        if (-not $drive) {
+            # Path doesn't exist yet, check the root
+            $driveLetter = $Path.Substring(0, 1)
+            $drive = Get-PSDrive -Name $driveLetter -ErrorAction SilentlyContinue
+        }
+        if ($drive -and $drive.Free) {
+            $freeMB = [math]::Round($drive.Free / 1MB)
+            return $freeMB -ge $RequiredMB
+        }
+        # Can't determine, assume OK
+        return $true
+    } catch {
+        return $true  # Can't check, proceed anyway
+    }
+}
+
+function Test-FileWritable {
+    param([string]$FilePath)
+    try {
+        $dir = Split-Path $FilePath -Parent
+        if (-not (Test-Path $dir)) {
+            return $true  # Directory doesn't exist yet, should be creatable
+        }
+        if (Test-Path $FilePath) {
+            # Try to open file for writing
+            $stream = [System.IO.File]::Open($FilePath, 'Open', 'ReadWrite', 'None')
+            $stream.Close()
+            return $true
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Install-OBS {
     Write-Log "Downloading OBS Studio $OBS_VERSION..."
     
+    # Check network connectivity first
+    if (-not (Test-NetworkConnectivity)) {
+        throw "Cannot reach GitHub. Please check your internet connection and firewall settings."
+    }
+    
     try {
-        # Download OBS installer
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $OBS_DOWNLOAD_URL -OutFile $OBS_INSTALLER_PATH -UseBasicParsing
-        Write-Log "Download complete" "SUCCESS"
+        # Enable TLS 1.2 and 1.3 for secure downloads
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+        
+        # Remove any existing partial download
+        if (Test-Path $OBS_INSTALLER_PATH) {
+            Remove-Item $OBS_INSTALLER_PATH -Force -ErrorAction SilentlyContinue
+        }
+        
+        # Try primary download URL
+        try {
+            Invoke-WebRequest -Uri $OBS_DOWNLOAD_URL -OutFile $OBS_INSTALLER_PATH -UseBasicParsing -TimeoutSec 300
+        } catch {
+            Write-Log "Primary download failed, this OBS version may no longer be available: $_" "WARNING"
+            Write-Log "Please download OBS Studio manually from https://obsproject.com/download" "ERROR"
+            throw "Failed to download OBS installer. The version $OBS_VERSION may no longer be available."
+        }
+        
+        # Validate download size
+        $downloadedSize = (Get-Item $OBS_INSTALLER_PATH).Length
+        if ($downloadedSize -lt $MIN_INSTALLER_SIZE_BYTES) {
+            throw "Downloaded file is too small ($downloadedSize bytes). Expected at least $MIN_INSTALLER_SIZE_BYTES bytes. Download may be corrupt or incomplete."
+        }
+        
+        Write-Log "Download complete ($([math]::Round($downloadedSize / 1MB, 1)) MB)" "SUCCESS"
     } catch {
         Write-Log "Failed to download OBS: $_" "ERROR"
+        # Clean up partial download
+        if (Test-Path $OBS_INSTALLER_PATH) {
+            Remove-Item $OBS_INSTALLER_PATH -Force -ErrorAction SilentlyContinue
+        }
         throw
     }
 
     Write-Log "Installing OBS Studio silently..."
     
     try {
-        # Run installer silently
-        $process = Start-Process -FilePath $OBS_INSTALLER_PATH -ArgumentList "/S", "/D=$InstallPath" -Wait -PassThru -NoNewWindow
+        # NSIS installers require /D= to be the LAST argument and path must NOT be quoted
+        # For paths with spaces, NSIS handles it correctly when /D= is last
+        $installerArgs = @("/S", "/D=$InstallPath")
+        
+        $process = Start-Process -FilePath $OBS_INSTALLER_PATH -ArgumentList $installerArgs -Wait -PassThru
         
         if ($process.ExitCode -ne 0) {
             throw "OBS installer exited with code $($process.ExitCode)"
+        }
+        
+        # Verify installation actually succeeded
+        Start-Sleep -Seconds 2
+        if (-not (Test-OBSInstalled)) {
+            throw "OBS installation appeared to complete but obs64.exe was not found at expected location"
         }
         
         Write-Log "OBS Studio installed successfully" "SUCCESS"
@@ -108,7 +206,7 @@ function Install-OBS {
     } finally {
         # Clean up installer
         if (Test-Path $OBS_INSTALLER_PATH) {
-            Remove-Item $OBS_INSTALLER_PATH -Force
+            Remove-Item $OBS_INSTALLER_PATH -Force -ErrorAction SilentlyContinue
         }
     }
 }
@@ -145,12 +243,16 @@ function Configure-OBSWebSocket {
         "SafeMode" = "false"
     }
 
-    # Read existing config
-    $config = @{}
+    # Read existing config, preserving section order
+    $config = [ordered]@{}
     if (Test-Path $globalConfigPath) {
         $currentSection = ""
-        Get-Content $globalConfigPath | ForEach-Object {
+        Get-Content $globalConfigPath -Encoding UTF8 | ForEach-Object {
             $line = $_.Trim()
+            # Skip empty lines and comments
+            if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith(';') -or $line.StartsWith('#')) {
+                return
+            }
             if ($line -match '^\[(.+)\]$') {
                 $currentSection = $matches[1]
                 if (-not $config.ContainsKey($currentSection)) {
@@ -188,7 +290,9 @@ function Configure-OBSWebSocket {
         $output += ""
     }
     
-    Set-Content -Path $globalConfigPath -Value ($output -join "`n") -Encoding UTF8
+    # Use UTF8 without BOM (OBS expects this format)
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllLines($globalConfigPath, $output, $utf8NoBom)
     
     Write-Log "WebSocket server configured (port 4455, no auth)" "SUCCESS"
     Write-Log "Safe mode disabled - OBS will always start normally" "SUCCESS"
@@ -211,16 +315,62 @@ function Configure-OBSProfile {
         New-Item -ItemType Directory -Path $profilePath -Force | Out-Null
     }
     
-    # Basic profile configuration
+    # Get display information for canvas sizing
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+    } catch {
+        Write-Log "Failed to load System.Windows.Forms assembly: $_" "ERROR"
+        throw "Cannot detect display configuration. Ensure .NET Framework is installed."
+    }
+    
+    $screens = [System.Windows.Forms.Screen]::AllScreens
+    
+    # Validate we have at least one screen
+    if ($null -eq $screens -or $screens.Count -eq 0) {
+        Write-Log "No displays detected, using default 1920x1080" "WARNING"
+        $canvasWidth = 1920
+        $canvasHeight = 1080
+    } else {
+        # Calculate total canvas size (virtual screen bounds)
+        $minX = 0
+        $minY = 0
+        $maxX = 0
+        $maxY = 0
+        
+        foreach ($screen in $screens) {
+            $bounds = $screen.Bounds
+            if ($bounds.X -lt $minX) { $minX = $bounds.X }
+            if ($bounds.Y -lt $minY) { $minY = $bounds.Y }
+            if (($bounds.X + $bounds.Width) -gt $maxX) { $maxX = $bounds.X + $bounds.Width }
+            if (($bounds.Y + $bounds.Height) -gt $maxY) { $maxY = $bounds.Y + $bounds.Height }
+        }
+        
+        $canvasWidth = $maxX - $minX
+        $canvasHeight = $maxY - $minY
+        
+        # Sanity check canvas dimensions
+        if ($canvasWidth -le 0 -or $canvasHeight -le 0) {
+            Write-Log "Invalid canvas dimensions detected ($canvasWidth x $canvasHeight), using default 1920x1080" "WARNING"
+            $canvasWidth = 1920
+            $canvasHeight = 1080
+        }
+        
+        Write-Log "Detected $($screens.Count) display(s), canvas size: ${canvasWidth}x${canvasHeight}" "INFO"
+    }
+    
+    # Normalize sessions path for OBS (use forward slashes for cross-platform compatibility in OBS)
+    $obsSessionsPath = $SessionsPath -replace '\\', '/'
+    
+    # Basic profile configuration with dynamic canvas size
     $basicIni = @"
 [General]
 Name=$ProfileName
 
 [Video]
-BaseCX=1920
-BaseCY=1080
-OutputCX=1920
-OutputCY=1080
+BaseCX=$canvasWidth
+BaseCY=$canvasHeight
+OutputCX=$canvasWidth
+OutputCY=$canvasHeight
 FPSType=1
 FPSCommon=30
 FPSInt=30
@@ -236,14 +386,14 @@ RecType=Standard
 RecFormat=mp4
 RecEncoder=obs_x264
 RecMuxerCustom=
-RecFilePath=C:/BandaStudy/Sessions
+RecFilePath=$obsSessionsPath
 RecFileNameWithoutSpace=true
 RecTracks=1
 RecSplitFileType=Size
 RecSplitFileResetTimestamps=false
 
 [SimpleOutput]
-FilePath=C:/BandaStudy/Sessions
+FilePath=$obsSessionsPath
 RecFormat=mp4
 RecQuality=Small
 RecEncoder=x264
@@ -256,11 +406,13 @@ RecRBPrefix=Replay
 Mode=Simple
 "@
 
-    Set-Content -Path "$profilePath\basic.ini" -Value $basicIni -Encoding UTF8
+    # Use UTF8 without BOM for OBS compatibility
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText("$profilePath\basic.ini", $basicIni, $utf8NoBom)
     
     # Encoder settings
     if (-not (Test-Path "$profilePath\recordEncoder.json")) {
-        Set-Content -Path "$profilePath\recordEncoder.json" -Value '{}' -Encoding UTF8
+        [System.IO.File]::WriteAllText("$profilePath\recordEncoder.json", '{}', $utf8NoBom)
     }
     
     # Service configuration (not needed for local recording but OBS expects it)
@@ -273,7 +425,7 @@ Mode=Simple
     "type": "rtmp_common"
 }
 "@
-    Set-Content -Path "$profilePath\service.json" -Value $serviceJson -Encoding UTF8
+    [System.IO.File]::WriteAllText("$profilePath\service.json", $serviceJson, $utf8NoBom)
     
     Write-Log "Profile '$ProfileName' created" "SUCCESS"
 }
@@ -297,16 +449,48 @@ function Configure-OBSSceneCollection {
     }
     
     # Get all monitors for multi-monitor capture
-    Add-Type -AssemblyName System.Windows.Forms
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+    } catch {
+        # Already loaded in Configure-OBSProfile, this is fine
+    }
+    
     $screens = [System.Windows.Forms.Screen]::AllScreens
+    
+    # Handle case where no screens are detected
+    if ($null -eq $screens -or $screens.Count -eq 0) {
+        Write-Log "No displays detected for scene collection, creating default single-monitor setup" "WARNING"
+        # Create a minimal scene with default values
+        $screens = @(@{
+            Bounds = @{
+                X = 0
+                Y = 0
+                Width = 1920
+                Height = 1080
+            }
+        })
+    }
+    
+    # Calculate canvas bounds (for proper positioning)
+    $minX = 0
+    $minY = 0
+    foreach ($screen in $screens) {
+        $bounds = if ($screen -is [System.Windows.Forms.Screen]) { $screen.Bounds } else { $screen.Bounds }
+        if ($bounds.X -lt $minX) { $minX = $bounds.X }
+        if ($bounds.Y -lt $minY) { $minY = $bounds.Y }
+    }
     
     $sources = @()
     $sceneItems = @()
     $itemIndex = 1
     
     foreach ($screen in $screens) {
-        $monitorName = "Monitor $itemIndex"
-        $bounds = $screen.Bounds
+        $bounds = if ($screen -is [System.Windows.Forms.Screen]) { $screen.Bounds } else { $screen.Bounds }
+        $monitorName = if ($screens.Count -gt 1) { "Monitor $itemIndex" } else { "Display Capture" }
+        
+        # Adjust position relative to canvas origin (handle negative coordinates)
+        $posX = $bounds.X - $minX
+        $posY = $bounds.Y - $minY
         
         $sourceUuid = [guid]::NewGuid().ToString()
         
@@ -338,18 +522,19 @@ function Configure-OBSSceneCollection {
             "private_settings" = @{}
         }
         
+        # Use bounds_type 2 (scale to inner bounds) for proper fitting
         $sceneItem = @{
             "name" = $monitorName
             "source_uuid" = $sourceUuid
             "visible" = $true
             "locked" = $false
             "rot" = 0.0
-            "pos" = @{ "x" = [double]$bounds.X; "y" = 0.0 }
+            "pos" = @{ "x" = [double]$posX; "y" = [double]$posY }
             "scale" = @{ "x" = 1.0; "y" = 1.0 }
             "align" = 5
-            "bounds_type" = 0
+            "bounds_type" = 2  # Scale to inner bounds - fits content properly
             "bounds_align" = 0
-            "bounds" = @{ "x" = 0.0; "y" = 0.0 }
+            "bounds" = @{ "x" = [double]$bounds.Width; "y" = [double]$bounds.Height }
             "crop_left" = 0
             "crop_top" = 0
             "crop_right" = 0
@@ -399,6 +584,25 @@ function Configure-OBSSceneCollection {
     }
     $sources += $audioSource
     
+    # Calculate canvas size for resolution field
+    $minX = 0
+    $minY = 0
+    $maxX = 0
+    $maxY = 0
+    foreach ($screen in $screens) {
+        $bounds = if ($screen -is [System.Windows.Forms.Screen]) { $screen.Bounds } else { $screen.Bounds }
+        if ($bounds.X -lt $minX) { $minX = $bounds.X }
+        if ($bounds.Y -lt $minY) { $minY = $bounds.Y }
+        if (($bounds.X + $bounds.Width) -gt $maxX) { $maxX = $bounds.X + $bounds.Width }
+        if (($bounds.Y + $bounds.Height) -gt $maxY) { $maxY = $bounds.Y + $bounds.Height }
+    }
+    $canvasWidth = $maxX - $minX
+    $canvasHeight = $maxY - $minY
+    
+    # Sanity check
+    if ($canvasWidth -le 0) { $canvasWidth = 1920 }
+    if ($canvasHeight -le 0) { $canvasHeight = 1080 }
+    
     # Create the main scene
     $sceneUuid = [guid]::NewGuid().ToString()
     $mainScene = @{
@@ -430,7 +634,7 @@ function Configure-OBSSceneCollection {
     }
     $sources += $mainScene
     
-    # Scene collection JSON
+    # Scene collection JSON with resolution info
     $sceneCollection = @{
         "current_scene" = "L7S Screen Capture"
         "current_program_scene" = "L7S Screen Capture"
@@ -450,12 +654,26 @@ function Configure-OBSSceneCollection {
         "scaling_level" = 0
         "scaling_off_x" = 0.0
         "scaling_off_y" = 0.0
+        "resolution" = @{
+            "x" = $canvasWidth
+            "y" = $canvasHeight
+        }
+        "version" = 1
     }
     
-    $sceneCollectionJson = $sceneCollection | ConvertTo-Json -Depth 10
-    Set-Content -Path $sceneFile -Value $sceneCollectionJson -Encoding UTF8
+    # Use depth 20 to handle complex nested structures properly
+    $sceneCollectionJson = $sceneCollection | ConvertTo-Json -Depth 20
+    
+    # Use UTF8 without BOM for OBS compatibility
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($sceneFile, $sceneCollectionJson, $utf8NoBom)
     
     Write-Log "Scene collection created with $($screens.Count) monitor(s)" "SUCCESS"
+    foreach ($screen in $screens) {
+        $bounds = if ($screen -is [System.Windows.Forms.Screen]) { $screen.Bounds } else { $screen.Bounds }
+        Write-Log "  Display: $($bounds.Width)x$($bounds.Height) at position ($($bounds.X), $($bounds.Y))" "INFO"
+    }
+    Write-Log "Canvas size: ${canvasWidth}x${canvasHeight}" "INFO"
 }
 
 function Set-OBSDefaultProfile {
@@ -472,12 +690,16 @@ function Set-OBSDefaultProfile {
     
     $globalConfigPath = "$OBS_APPDATA\global.ini"
     
-    # Read existing config
-    $config = @{}
+    # Read existing config, preserving section order
+    $config = [ordered]@{}
     if (Test-Path $globalConfigPath) {
         $currentSection = ""
-        Get-Content $globalConfigPath | ForEach-Object {
+        Get-Content $globalConfigPath -Encoding UTF8 | ForEach-Object {
             $line = $_.Trim()
+            # Skip empty lines and comments
+            if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith(';') -or $line.StartsWith('#')) {
+                return
+            }
             if ($line -match '^\[(.+)\]$') {
                 $currentSection = $matches[1]
                 if (-not $config.ContainsKey($currentSection)) {
@@ -508,21 +730,35 @@ function Set-OBSDefaultProfile {
         $output += ""
     }
     
-    Set-Content -Path $globalConfigPath -Value ($output -join "`n") -Encoding UTF8
+    # Use UTF8 without BOM (OBS expects this format)
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllLines($globalConfigPath, $output, $utf8NoBom)
     
     Write-Log "Default profile set to '$ProfileName'" "SUCCESS"
 }
 
 function Create-BandaStudyDirectory {
-    Write-Log "Creating BandaStudy sessions directory..."
+    Write-Log "Creating sessions directory..."
     
-    $sessionsPath = "C:\BandaStudy\Sessions"
-    
-    if (-not (Test-Path $sessionsPath)) {
-        New-Item -ItemType Directory -Path $sessionsPath -Force | Out-Null
-        Write-Log "Created: $sessionsPath" "SUCCESS"
+    if (-not (Test-Path $SessionsPath)) {
+        try {
+            New-Item -ItemType Directory -Path $SessionsPath -Force | Out-Null
+            Write-Log "Created: $SessionsPath" "SUCCESS"
+        } catch {
+            Write-Log "Failed to create sessions directory: $_" "ERROR"
+            Write-Log "Please manually create: $SessionsPath" "WARNING"
+        }
     } else {
-        Write-Log "Directory already exists: $sessionsPath" "INFO"
+        Write-Log "Directory already exists: $SessionsPath" "INFO"
+    }
+    
+    # Verify the directory is writable
+    try {
+        $testFile = Join-Path $SessionsPath ".write-test-$(Get-Random).tmp"
+        [System.IO.File]::WriteAllText($testFile, "test")
+        Remove-Item $testFile -Force
+    } catch {
+        Write-Log "Warning: Sessions directory may not be writable: $_" "WARNING"
     }
 }
 
@@ -545,6 +781,27 @@ function Main {
     Write-Host "  L7S Workflow Analyzer - OBS Setup" -ForegroundColor Cyan
     Write-Host "============================================" -ForegroundColor Cyan
     Write-Host ""
+    
+    # Check for administrator privileges if installing to Program Files
+    if ($InstallPath -like "*Program Files*" -and -not (Test-Administrator)) {
+        Write-Log "Installing to '$InstallPath' requires administrator privileges" "ERROR"
+        Write-Log "Please run this script as Administrator" "ERROR"
+        throw "Administrator privileges required for installation to Program Files"
+    }
+    
+    # Check disk space
+    if (-not (Test-DiskSpace -Path $InstallPath -RequiredMB $MIN_DISK_SPACE_MB)) {
+        Write-Log "Insufficient disk space. At least ${MIN_DISK_SPACE_MB}MB required." "ERROR"
+        throw "Insufficient disk space for installation"
+    }
+    
+    # Check if config files are writable (not locked by OneDrive, etc.)
+    $globalConfigPath = "$OBS_APPDATA\global.ini"
+    if ((Test-Path $globalConfigPath) -and -not (Test-FileWritable $globalConfigPath)) {
+        Write-Log "OBS config file is locked by another process (possibly cloud sync)" "ERROR"
+        Write-Log "Please close any cloud sync applications and try again" "ERROR"
+        throw "Cannot write to OBS configuration files - file is locked"
+    }
     
     $isNewInstall = $false
     
@@ -576,8 +833,23 @@ function Main {
     $obsProcesses = Get-Process -Name "obs64" -ErrorAction SilentlyContinue
     if ($obsProcesses) {
         Write-Log "Stopping running OBS instances..." "WARNING"
-        $obsProcesses | Stop-Process -Force
-        Start-Sleep -Seconds 2
+        $obsProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
+        
+        # Wait for OBS to fully terminate with timeout
+        $maxWaitSeconds = 10
+        $waited = 0
+        while ($waited -lt $maxWaitSeconds) {
+            Start-Sleep -Seconds 1
+            $waited++
+            $stillRunning = Get-Process -Name "obs64" -ErrorAction SilentlyContinue
+            if (-not $stillRunning) {
+                Write-Log "OBS stopped successfully" "INFO"
+                break
+            }
+            if ($waited -ge $maxWaitSeconds) {
+                Write-Log "OBS is still running after $maxWaitSeconds seconds. Configuration may fail." "WARNING"
+            }
+        }
     }
     
     # Configure OBS
@@ -597,7 +869,7 @@ function Main {
     Write-Host ""
     Write-Log "OBS Studio is configured for screen capture" "SUCCESS"
     Write-Log "WebSocket server: ws://127.0.0.1:4455 (no auth)" "INFO"
-    Write-Log "Recording output: C:\BandaStudy\Sessions\" "INFO"
+    Write-Log "Recording output: $SessionsPath" "INFO"
     
     if ($script:EXISTING_OBS_DETECTED -and -not $isNewInstall) {
         Write-Host ""
@@ -608,5 +880,12 @@ function Main {
     Write-Host ""
 }
 
-# Run main
-Main
+# Run main with error handling
+try {
+    Main
+    exit 0
+} catch {
+    Write-Log "Installation failed: $_" "ERROR"
+    Write-Log "Stack trace: $($_.ScriptStackTrace)" "ERROR"
+    exit 1
+}

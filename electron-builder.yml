@@ -34,6 +34,8 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: L7S Workflow Analyzer
   license: LICENSE
+  include: installer/nsis-include.nsh
+  warningsAsErrors: false
 
 portable:
   artifactName: ${productName}-${version}-portable.${ext}

@@ -136,11 +136,14 @@ ConfigureOBS:
     ; Run PowerShell script to install/configure OBS
     DetailPrint "Configuring OBS for screen capture..."
     
-    nsExec::ExecToLog 'powershell.exe -ExecutionPolicy Bypass -File "$INSTDIR\setup\install-obs.ps1"'
+    ; Use quoted path for PowerShell script execution
+    ; -NoProfile speeds up execution, -NonInteractive prevents prompts
+    nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\setup\install-obs.ps1" -SetAsDefault'
     Pop $0
     
     ${If} $0 != 0
         DetailPrint "Warning: OBS configuration may have encountered issues (exit code: $0)"
+        MessageBox MB_OK|MB_ICONEXCLAMATION "OBS configuration encountered issues. You may need to configure OBS manually.$\r$\n$\r$\nThe application will still work, but please run the setup again if you experience issues."
     ${Else}
         DetailPrint "OBS configuration completed successfully!"
     ${EndIf}

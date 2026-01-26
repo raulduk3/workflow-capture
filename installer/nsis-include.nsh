@@ -47,13 +47,19 @@ ConfigureOBS:
     
 RunPowerShell:
     ; Run the PowerShell configuration script
-    nsExec::ExecToLog 'powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File "$INSTDIR\resources\setup\install-obs.ps1"'
+    ; -NoProfile: Skip loading user profile (faster)
+    ; -NonInteractive: Don't prompt for input
+    ; -ExecutionPolicy Bypass: Allow script execution
+    ; -SetAsDefault: Set L7S profile as default for new installs
+    nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "$INSTDIR\resources\setup\install-obs.ps1" -SetAsDefault'
     Pop $0
     
     ${If} $0 == 0
         DetailPrint "OBS configuration completed successfully!"
     ${Else}
         DetailPrint "OBS configuration completed with warnings (exit: $0)"
+        ; Show message but don't abort installation
+        MessageBox MB_OK|MB_ICONINFORMATION "OBS setup completed with some warnings. The application should still work correctly.$\r$\n$\r$\nIf you experience issues, you can re-run the OBS setup from the application settings."
     ${EndIf}
     
 !macroend
