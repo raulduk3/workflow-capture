@@ -1,4 +1,4 @@
-# L7S Workflow Analyzer
+# L7S Workflow Capture
 
 Screen recording workflow analyzer using OBS Studio. Captures screen recordings with session metadata for workflow analysis.
 
