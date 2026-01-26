@@ -1,0 +1,150 @@
+name: Test Windows Installer
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'installer/**'
+      - 'electron-builder.yml'
+      - '.github/workflows/test-installer.yml'
+
+jobs:
+  test-windows-installer:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build application
+        run: npm run build
+      
+      - name: Build Windows installer
+        run: npm run dist:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: List built artifacts
+        run: dir release
+      
+      - name: Run installer silently
+        shell: powershell
+        run: |
+          $installer = Get-ChildItem -Path "release" -Filter "L7S Workflow Analyzer-*-x64.exe" | Select-Object -First 1
+          Write-Host "Running installer: $($installer.FullName)"
+          
+          # Run NSIS installer with silent flag
+          Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait -NoNewWindow
+          
+          Write-Host "Installer completed"
+      
+      - name: Verify installation
+        shell: powershell
+        run: |
+          $installPath = "C:\Program Files\Layer 7 Systems\Workflow Analyzer"
+          
+          Write-Host "Checking installation path: $installPath"
+          
+          if (Test-Path $installPath) {
+            Write-Host "✓ Installation directory exists"
+            
+            $exePath = Join-Path $installPath "L7S Workflow Analyzer.exe"
+            if (Test-Path $exePath) {
+              Write-Host "✓ Main executable found"
+              $exeInfo = Get-Item $exePath
+              Write-Host "  Size: $([math]::Round($exeInfo.Length / 1MB, 2)) MB"
+            } else {
+              Write-Error "✗ Main executable not found"
+              exit 1
+            }
+            
+            $resourcesPath = Join-Path $installPath "resources"
+            if (Test-Path $resourcesPath) {
+              Write-Host "✓ Resources directory exists"
+              
+              $asarPath = Join-Path $resourcesPath "app.asar"
+              if (Test-Path $asarPath) {
+                Write-Host "✓ app.asar found"
+                $asarInfo = Get-Item $asarPath
+                Write-Host "  Size: $([math]::Round($asarInfo.Length / 1MB, 2)) MB"
+              } else {
+                Write-Error "✗ app.asar not found"
+                exit 1
+              }
+            } else {
+              Write-Error "✗ Resources directory not found"
+              exit 1
+            }
+            
+            Write-Host ""
+            Write-Host "=== Installation directory contents ==="
+            Get-ChildItem -Path $installPath | Format-Table Name, Length, LastWriteTime
+            
+          } else {
+            Write-Error "✗ Installation directory not found at: $installPath"
+            exit 1
+          }
+      
+      - name: Check Start Menu shortcut
+        shell: powershell
+        run: |
+          $startMenuPath = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Layer 7 Systems"
+          
+          if (Test-Path $startMenuPath) {
+            Write-Host "✓ Start Menu folder exists"
+            Get-ChildItem -Path $startMenuPath | Format-Table Name
+          } else {
+            Write-Warning "Start Menu folder not found (expected for silent install without per-user shortcuts)"
+          }
+      
+      - name: Verify uninstaller exists
+        shell: powershell
+        run: |
+          $uninstallPath = "C:\Program Files\Layer 7 Systems\Workflow Analyzer\Uninstall L7S Workflow Analyzer.exe"
+          
+          if (Test-Path $uninstallPath) {
+            Write-Host "✓ Uninstaller found"
+          } else {
+            Write-Error "✗ Uninstaller not found"
+            exit 1
+          }
+      
+      - name: Test uninstaller
+        shell: powershell
+        run: |
+          $uninstallPath = "C:\Program Files\Layer 7 Systems\Workflow Analyzer\Uninstall L7S Workflow Analyzer.exe"
+          
+          Write-Host "Running uninstaller..."
+          Start-Process -FilePath $uninstallPath -ArgumentList "/S" -Wait -NoNewWindow
+          
+          Write-Host "Uninstaller completed"
+      
+      - name: Verify uninstallation
+        shell: powershell
+        run: |
+          $installPath = "C:\Program Files\Layer 7 Systems\Workflow Analyzer"
+          
+          if (Test-Path $installPath) {
+            Write-Error "✗ Installation directory still exists after uninstall"
+            Get-ChildItem -Path $installPath -Recurse | Format-Table FullName
+            exit 1
+          } else {
+            Write-Host "✓ Installation directory removed successfully"
+          }
+      
+      - name: Upload installer artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tested-windows-installer
+          path: release/*.exe
+          retention-days: 7

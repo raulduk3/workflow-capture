@@ -4,11 +4,10 @@ Screen recording workflow analyzer using OBS Studio. Captures screen recordings 
 
 ## Download
 
-Download the latest release for your platform from the [Releases](../../releases) page:
+Download the latest Windows release from the [Releases](../../releases) page:
 
 - **Windows**: `L7S-Workflow-Analyzer-x.x.x-x64.exe` (NSIS Installer)
 - **Windows Portable**: `L7S-Workflow-Analyzer-x.x.x-portable.exe`
-- **macOS**: `L7S-Workflow-Analyzer-x.x.x.dmg`
 
 ## What the Installer Does
 
@@ -45,13 +44,18 @@ npm run start
 ```bash
 # Windows
 npm run dist:win
-
-# macOS
-npm run dist:mac
-
-# All platforms
-npm run dist:all
 ```
+
+### Docker Smoke Test (Windows installer)
+
+After building, you can run the installer inside Wine via Docker to ensure it installs cleanly:
+
+```bash
+# Example after building to release/...
+./docker/test-windows-installer.sh "release/L7S Workflow Analyzer-0.1.2-x64.exe"
+```
+
+This runs the NSIS installer silently, verifies the app files were written under `Program Files`, and tears down the container afterward. On macOS/Linux hosts this avoids needing a local Wine install.
 
 ## Releases
 
@@ -65,8 +69,7 @@ git push origin v1.0.0
 
 This will automatically:
 1. Build Windows installer (NSIS + portable)
-2. Build macOS DMG (Universal binary)
-3. Create a GitHub Release with all artifacts
+2. Create a GitHub Release with all artifacts
 
 ## Architecture
 
@@ -89,7 +92,6 @@ src/
 
 Sessions are stored in:
 - **Windows**: `C:\BandaStudy\Sessions\<session-id>\`
-- **macOS/Linux**: `~/BandaStudy/Sessions/<session-id>/`
 
 Each session contains:
 - `video.mp4` - Screen recording

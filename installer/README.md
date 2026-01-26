@@ -1,6 +1,6 @@
 # L7S Workflow Analyzer - Installer
 
-This directory contains the installer build system for Windows and macOS.
+This directory contains the installer build system for Windows.
 
 ## Files
 
@@ -9,9 +9,6 @@ This directory contains the installer build system for Windows and macOS.
 - **installer.nsi** - Standalone NSIS installer script (optional, for custom builds)
 - **nsis-include.nsh** - NSIS include script used by electron-builder
 - **build-installer.bat** - Windows batch script to build everything
-
-### macOS
-- **install-obs-macos.sh** - Bash script that downloads, installs, and configures OBS Studio
 
 ## Building the Installer
 
@@ -37,6 +34,16 @@ This creates:
 - `release/L7S Workflow Analyzer-1.0.0-x64.exe` - NSIS installer
 - `release/L7S Workflow Analyzer-1.0.0-portable.exe` - Portable version
 - `release/win-unpacked/` - Unpacked application directory
+
+### Docker smoke test (Wine)
+
+Run the Windows installer headlessly inside Wine to ensure it installs cleanly:
+
+```bash
+./docker/test-windows-installer.sh "release/L7S Workflow Analyzer-1.0.0-x64.exe"
+```
+
+The script runs the installer silently and verifies files are written under `Program Files` in the Wine prefix.
 
 #### Using build-installer.bat
 

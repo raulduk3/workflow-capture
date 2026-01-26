@@ -19,6 +19,8 @@ export class ObsSupervisor extends EventEmitter {
   private readonly profileName: string = 'L7S-ScreenCapture';
   private readonly sceneCollectionName: string = 'L7S-ScreenCapture';
   private monitorInterval: NodeJS.Timeout | null = null;
+  private startupMode: 'normal' | 'safe' = 'normal';
+  private bypassSafeModePrompt: boolean = true;
 
   constructor() {
     super();
@@ -169,7 +171,20 @@ export class ObsSupervisor extends EventEmitter {
         this.log('Using open command to launch OBS on macOS');
         
         // Use --args to pass arguments to OBS
-        const obsArgs = `--args --profile "${this.profileName}" --collection "${this.sceneCollectionName}"`;
+        const argList: string[] = [
+          `--profile "${this.profileName}"`,
+          `--collection "${this.sceneCollectionName}"`,
+          '--minimize-to-tray',
+          '--disable-updater',
+          '--disable-missing-files-check',
+        ];
+
+        // Bypass startup safe-mode dialog by explicitly choosing a mode when requested
+        if (this.bypassSafeModePrompt && this.startupMode === 'safe') {
+          argList.push('--safe-mode');
+        }
+
+        const obsArgs = `--args ${argList.join(' ')}`;
         exec(`open -a "${this.obsPath}" ${obsArgs}`, (error) => {
           if (error) {
             this.log(`Failed to open OBS: ${error.message}`);
@@ -210,20 +225,25 @@ export class ObsSupervisor extends EventEmitter {
       // Windows/Linux: Use spawn directly with profile selection
       return new Promise((resolve, reject) => {
         try {
-          const args = platform === 'win32' 
-            ? [
-                '--minimize-to-tray',
-                '--disable-updater',
-                '--multi',
-                '--profile', this.profileName,
-                '--collection', this.sceneCollectionName
-              ]
-            : [
-                '--minimize-to-tray',
-                '--disable-updater',
-                '--profile', this.profileName,
-                '--collection', this.sceneCollectionName
-              ];
+          const baseArgs: string[] = [
+            '--minimize-to-tray',
+            '--disable-updater',
+            '--disable-missing-files-check',
+            '--profile', this.profileName,
+            '--collection', this.sceneCollectionName,
+          ];
+
+          // Windows-specific: allow multi-instance to avoid warnings
+          if (platform === 'win32') {
+            baseArgs.push('--multi');
+          }
+
+          // Bypass startup safe-mode dialog by explicitly choosing a mode when requested
+          if (this.bypassSafeModePrompt && this.startupMode === 'safe') {
+            baseArgs.push('--safe-mode');
+          }
+
+          const args = baseArgs;
 
           this.log(`Spawning OBS with args: ${JSON.stringify(args)}`);
           
@@ -314,16 +334,29 @@ export class ObsSupervisor extends EventEmitter {
 
     return new Promise((resolve) => {
       if (platform === 'darwin') {
-        // macOS: Use pkill to stop OBS
-        exec('pkill -f "OBS.app/Contents/MacOS/OBS"', (error) => {
-          if (error) {
-            this.log(`pkill error (may be already stopped): ${error.message}`);
+        // macOS: Request graceful quit via AppleScript, fallback to pkill
+        exec('osascript -e "tell application \"OBS\" to quit"', (quitErr) => {
+          if (quitErr) {
+            this.log(`AppleScript quit failed, falling back to pkill: ${quitErr.message}`);
+            exec('pkill -f "OBS.app/Contents/MacOS/OBS"', (error) => {
+              if (error) {
+                this.log(`pkill error (may be already stopped): ${error.message}`);
+              } else {
+                this.log('OBS stopped via pkill');
+              }
+              this.obsPid = null;
+              this.emit('obs-stopped');
+              resolve();
+            });
           } else {
-            this.log('OBS stopped via pkill');
+            this.log('OBS requested to quit via AppleScript');
+            // Wait briefly to allow graceful shutdown
+            setTimeout(() => {
+              this.obsPid = null;
+              this.emit('obs-stopped');
+              resolve();
+            }, 1500);
           }
-          this.obsPid = null;
-          this.emit('obs-stopped');
-          resolve();
         });
       } else {
         const forceKillTimeout = setTimeout(() => {
@@ -367,5 +400,14 @@ export class ObsSupervisor extends EventEmitter {
 
   public getPid(): number | undefined {
     return this.obsPid || this.obsProcess?.pid;
+  }
+
+  // Optional configuration to control startup behavior
+  public setStartupMode(mode: 'normal' | 'safe'): void {
+    this.startupMode = mode;
+  }
+
+  public setBypassSafeModePrompt(bypass: boolean): void {
+    this.bypassSafeModePrompt = bypass;
   }
 }

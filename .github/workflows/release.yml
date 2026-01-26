@@ -66,6 +66,27 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
+      - name: Generate checksums
+        shell: powershell
+        run: |
+          $version = "${{ needs.check-version.outputs.version }}"
+          $checksumFile = "release/CHECKSUMS-SHA256.txt"
+          
+          Write-Host "Generating SHA256 checksums..."
+          
+          $files = Get-ChildItem -Path "release" -Filter "*.exe"
+          $checksums = @()
+          
+          foreach ($file in $files) {
+            $hash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash.ToLower()
+            $checksums += "$hash  $($file.Name)"
+            Write-Host "$hash  $($file.Name)"
+          }
+          
+          $checksums | Out-File -FilePath $checksumFile -Encoding UTF8
+          Write-Host ""
+          Write-Host "Checksums written to $checksumFile"
+      
       - name: List build output
         run: |
           echo "=== Release folder contents ==="
@@ -78,51 +99,12 @@ jobs:
           name: windows-builds
           path: |
             release/*.exe
-          if-no-files-found: error
-          retention-days: 5
-
-  build-macos:
-    needs: check-version
-    if: needs.check-version.outputs.should_release == 'true'
-    runs-on: macos-latest
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-      
-      - name: Install dependencies
-        run: npm ci
-      
-      - name: Build application
-        run: npm run build
-      
-      - name: Build macOS app
-        run: npm run dist:mac
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: List build output
-        run: |
-          echo "=== Release folder contents ==="
-          ls -la release/
-      
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-builds
-          path: |
-            release/*.dmg
+            release/CHECKSUMS-SHA256.txt
           if-no-files-found: error
           retention-days: 5
 
   release:
-    needs: [check-version, build-windows, build-macos]
+    needs: [check-version, build-windows]
     runs-on: ubuntu-latest
     
     permissions:
@@ -138,16 +120,20 @@ jobs:
           name: windows-builds
           path: ./artifacts
       
-      - name: Download macOS artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-builds
-          path: ./artifacts
+      - name: Verify checksums
+        run: |
+          echo "=== Verifying artifact integrity ==="
+          cd ./artifacts
+          cat CHECKSUMS-SHA256.txt
+          echo ""
+          echo "=== Verifying SHA256 hashes ==="
+          sha256sum -c CHECKSUMS-SHA256.txt
+          echo "✓ All checksums verified"
       
       - name: List artifacts
         run: |
           echo "=== All artifacts ==="
-          ls -la ./artifacts/
+          ls -lh ./artifacts/
       
       - name: Create Git tag
         run: |
@@ -165,7 +151,33 @@ jobs:
           name: L7S Workflow Analyzer v${{ needs.check-version.outputs.version }}
           draft: false
           prerelease: false
-          generate_release_notes: true
+          body: |
+            ## Downloads
+            
+            | File | Description |
+            |------|-------------|
+            | `L7S Workflow Analyzer-${{ needs.check-version.outputs.version }}-x64.exe` | Windows Installer (recommended) |
+            | `L7S Workflow Analyzer-${{ needs.check-version.outputs.version }}-portable.exe` | Portable version (no install required) |
+            
+            ## Installation
+            
+            1. Download `L7S Workflow Analyzer-${{ needs.check-version.outputs.version }}-x64.exe`
+            2. Run the installer (requires admin privileges)
+            3. The installer will automatically download and configure OBS Studio
+            4. Launch from Start Menu or Desktop shortcut
+            
+            ## Verify Download Integrity
+            
+            SHA256 checksums are provided in `CHECKSUMS-SHA256.txt`. To verify on Windows PowerShell:
+            ```powershell
+            Get-FileHash "L7S Workflow Analyzer-${{ needs.check-version.outputs.version }}-x64.exe" -Algorithm SHA256
+            ```
+            
+            ## Requirements
+            
+            - Windows 10 or later (64-bit)
+            - Internet connection (for initial OBS download)
+            
           files: ./artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -15,10 +15,6 @@ extraResources:
     to: setup/install-obs.ps1
     filter:
       - "**/*"
-  - from: installer/install-obs-macos.sh
-    to: setup/install-obs-macos.sh
-    filter:
-      - "**/*"
 
 win:
   target:
@@ -41,23 +37,6 @@ nsis:
 
 portable:
   artifactName: ${productName}-${version}-portable.${ext}
-
-mac:
-  target:
-    - target: dmg
-      arch:
-        - x64
-        - arm64
-  artifactName: ${productName}-${version}.${ext}
-
-dmg:
-  contents:
-    - x: 130
-      y: 220
-    - x: 410
-      y: 220
-      type: link
-      path: /Applications
 
 asar: true
 compression: maximum

@@ -133,6 +133,18 @@ function Configure-OBSWebSocket {
         "FirstLoad" = "false"
     }
 
+    # General settings to disable safe mode prompt
+    $generalSettings = @{
+        "OpenStatsOnStartup" = "false"
+        "RecordWhenStreaming" = "false"
+        "KeepRecordingWhenStreamStops" = "false"
+        "WarnBeforeStartingStream" = "false"
+        "WarnBeforeStoppingStream" = "false"
+        "SnappingEnabled" = "true"
+        "SnapDistance" = "10.0"
+        "SafeMode" = "false"
+    }
+
     # Read existing config
     $config = @{}
     if (Test-Path $globalConfigPath) {
@@ -150,7 +162,15 @@ function Configure-OBSWebSocket {
         }
     }
     
-    # Add/update only WebSocket settings
+    # Add/update General settings (disable safe mode)
+    if (-not $config.ContainsKey("General")) {
+        $config["General"] = [ordered]@{}
+    }
+    foreach ($key in $generalSettings.Keys) {
+        $config["General"][$key] = $generalSettings[$key]
+    }
+    
+    # Add/update WebSocket settings
     if (-not $config.ContainsKey("OBSWebSocket")) {
         $config["OBSWebSocket"] = [ordered]@{}
     }
@@ -171,6 +191,7 @@ function Configure-OBSWebSocket {
     Set-Content -Path $globalConfigPath -Value ($output -join "`n") -Encoding UTF8
     
     Write-Log "WebSocket server configured (port 4455, no auth)" "SUCCESS"
+    Write-Log "Safe mode disabled - OBS will always start normally" "SUCCESS"
 }
 
 function Configure-OBSProfile {
