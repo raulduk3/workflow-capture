@@ -1,0 +1,72 @@
+appId: com.layer7.workflowanalyzer
+productName: L7S Workflow Analyzer
+copyright: Copyright © 2024 Layer 7 Systems
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - package.json
+
+extraResources:
+  - from: installer/install-obs.ps1
+    to: setup/install-obs.ps1
+    filter:
+      - "**/*"
+  - from: installer/install-obs-macos.sh
+    to: setup/install-obs-macos.sh
+    filter:
+      - "**/*"
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+    - target: dir
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  icon: build/icon.ico
+
+nsis:
+  oneClick: false
+  perMachine: true
+  allowToChangeInstallationDirectory: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: L7S Workflow Analyzer
+  include: installer/nsis-include.nsh
+  license: LICENSE
+
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  artifactName: ${productName}-${version}.${ext}
+  icon: build/icon.icns
+
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+asar: true
+compression: maximum

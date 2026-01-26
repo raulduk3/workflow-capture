@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <title>L7S Workflow Analyzer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Workflow Analyzer</h1>
+      <div id="status-indicator" class="status-indicator starting">
+        <span id="status-dot" class="status-dot"></span>
+        <span id="status-text">Starting...</span>
+      </div>
+    </header>
+
+    <main>
+      <div id="timer-display" class="timer-display hidden">
+        <span id="timer">00:00:00</span>
+      </div>
+
+      <div class="input-group">
+        <label for="task-note">Task Description</label>
+        <input 
+          type="text" 
+          id="task-note" 
+          placeholder="What are you working on?"
+          maxlength="200"
+        >
+      </div>
+
+      <div class="button-group">
+        <button id="record-btn" class="btn btn-primary" disabled>
+          <span id="record-btn-text">Start Recording</span>
+        </button>
+      </div>
+
+      <div id="error-container" class="error-container hidden">
+        <p id="error-message"></p>
+        <button id="retry-btn" class="btn btn-secondary">Retry Connection</button>
+      </div>
+    </main>
+
+    <footer>
+      <button id="open-folder-btn" class="btn btn-link">Open Folder</button>
+      <button id="export-btn" class="btn btn-link">Export All</button>
+    </footer>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
