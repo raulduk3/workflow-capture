@@ -28,23 +28,15 @@ win:
     - target: portable
       arch:
         - x64
-    - target: dir
-      arch:
-        - x64
   artifactName: ${productName}-${version}-${arch}.${ext}
-  icon: build/icon.ico
 
 nsis:
   oneClick: false
   perMachine: true
   allowToChangeInstallationDirectory: true
-  installerIcon: build/icon.ico
-  uninstallerIcon: build/icon.ico
-  installerHeaderIcon: build/icon.ico
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: L7S Workflow Analyzer
-  include: installer/nsis-include.nsh
   license: LICENSE
 
 portable:
@@ -57,7 +49,6 @@ mac:
         - x64
         - arm64
   artifactName: ${productName}-${version}.${ext}
-  icon: build/icon.icns
 
 dmg:
   contents:
