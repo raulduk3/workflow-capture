@@ -40,7 +40,7 @@ jobs:
   build-windows:
     needs: check-version
     if: needs.check-version.outputs.should_release == 'true'
-    runs-on: windows-latest
+    runs-on: windows-2022
     
     steps:
       - name: Checkout code
