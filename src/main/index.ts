@@ -89,9 +89,8 @@ async function initializeObs(): Promise<void> {
 
   // Initialize OBS supervisor
   obsSupervisor = new ObsSupervisor();
-  // Ensure startup bypasses the normal vs safe mode prompt by choosing safe mode
-  obsSupervisor.setStartupMode('safe');
-  obsSupervisor.setBypassSafeModePrompt(true);
+  // Note: Do NOT use safe mode as it disables WebSockets
+  // The global.ini SafeMode=false setting should prevent the safe mode prompt
   
   obsSupervisor.on('obs-started', () => {
     log('OBS process started');

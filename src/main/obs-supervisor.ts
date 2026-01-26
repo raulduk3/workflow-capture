@@ -171,6 +171,7 @@ export class ObsSupervisor extends EventEmitter {
         this.log('Using open command to launch OBS on macOS');
         
         // Use --args to pass arguments to OBS
+        // Note: Do NOT use --safe-mode as it disables WebSockets entirely
         const argList: string[] = [
           `--profile "${this.profileName}"`,
           `--collection "${this.sceneCollectionName}"`,
@@ -178,11 +179,6 @@ export class ObsSupervisor extends EventEmitter {
           '--disable-updater',
           '--disable-missing-files-check',
         ];
-
-        // Bypass startup safe-mode dialog by explicitly choosing a mode when requested
-        if (this.bypassSafeModePrompt && this.startupMode === 'safe') {
-          argList.push('--safe-mode');
-        }
 
         const obsArgs = `--args ${argList.join(' ')}`;
         exec(`open -a "${this.obsPath}" ${obsArgs}`, (error) => {
@@ -238,10 +234,7 @@ export class ObsSupervisor extends EventEmitter {
             baseArgs.push('--multi');
           }
 
-          // Bypass startup safe-mode dialog by explicitly choosing a mode when requested
-          if (this.bypassSafeModePrompt && this.startupMode === 'safe') {
-            baseArgs.push('--safe-mode');
-          }
+          // Note: Do NOT use --safe-mode as it disables WebSockets entirely
 
           const args = baseArgs;
 
