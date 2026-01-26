@@ -2,8 +2,8 @@ name: Build and Release
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 jobs:
@@ -25,17 +25,13 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Version: $VERSION"
       
-      - name: Check if tag exists
+      - name: Check if release exists
         id: check_tag
         run: |
           VERSION=${{ steps.get_version.outputs.version }}
-          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
-            echo "Tag v$VERSION already exists, skipping release"
-            echo "should_release=false" >> $GITHUB_OUTPUT
-          else
-            echo "Tag v$VERSION does not exist, will create release"
-            echo "should_release=true" >> $GITHUB_OUTPUT
-          fi
+          # Always release when triggered by tag push or workflow_dispatch
+          echo "should_release=true" >> $GITHUB_OUTPUT
+          echo "Will create release for v$VERSION"
 
   build-windows:
     needs: check-version
