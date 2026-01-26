@@ -1,4 +1,4 @@
-; L7S Workflow Analyzer - NSIS Include Script
+; L7S Workflow Capture - NSIS Include Script
 ; This is included by electron-builder's NSIS target
 
 !include "FileFunc.nsh"
@@ -10,14 +10,14 @@
 
 !macro customHeader
     ; Custom header - runs at the start
-    !system "echo Building L7S Workflow Analyzer installer..."
+    !system "echo Building L7S Workflow Capture installer..."
 !macroend
 
 !macro preInit
     ; Pre-initialization - runs before anything else
     ; Check Windows version
     ${IfNot} ${AtLeastWin10}
-        MessageBox MB_OK|MB_ICONSTOP "L7S Workflow Analyzer requires Windows 10 or later."
+        MessageBox MB_OK|MB_ICONSTOP "L7S Workflow Capture requires Windows 10 or later."
         Abort
     ${EndIf}
 !macroend
@@ -73,7 +73,7 @@ RunPowerShell:
     ; Custom uninstall steps
     
     ; Kill the app if running
-    nsExec::ExecToLog 'taskkill /F /IM "L7S Workflow Analyzer.exe" 2>nul'
+    nsExec::ExecToLog 'taskkill /F /IM "L7S Workflow Capture.exe" 2>nul'
     
     ; Note: We intentionally don't remove OBS or BandaStudy folder
     ; to preserve user recordings and OBS settings

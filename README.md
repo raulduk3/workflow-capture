@@ -1,13 +1,13 @@
 # L7S Workflow Capture
 
-Screen recording workflow analyzer using OBS Studio. Captures screen recordings with session metadata for workflow analysis.
+Screen recording workflow capture using OBS Studio. Captures screen recordings with session metadata for workflow analysis.
 
 ## Download
 
 Download the latest Windows release from the [Releases](../../releases) page:
 
-- **Windows**: `L7S-Workflow-Analyzer-x.x.x-x64.exe` (NSIS Installer)
-- **Windows Portable**: `L7S-Workflow-Analyzer-x.x.x-portable.exe`
+- **Windows**: `L7S-Workflow-Capture-x.x.x-x64.exe` (NSIS Installer)
+- **Windows Portable**: `L7S-Workflow-Capture-x.x.x-portable.exe`
 
 ## What the Installer Does
 
@@ -52,7 +52,7 @@ After building, you can run the installer inside Wine via Docker to ensure it in
 
 ```bash
 # Example after building to release/...
-./docker/test-windows-installer.sh "release/L7S Workflow Analyzer-0.1.2-x64.exe"
+./docker/test-windows-installer.sh "release/L7S Workflow Capture-0.1.2-x64.exe"
 ```
 
 This runs the NSIS installer silently, verifies the app files were written under `Program Files`, and tears down the container afterward. On macOS/Linux hosts this avoids needing a local Wine install.

@@ -1,12 +1,12 @@
 @echo off
 REM ============================================
-REM L7S Workflow Analyzer - Build Script
+REM L7S Workflow Capture - Build Script
 REM Run this to create the installer for distribution
 REM ============================================
 
 echo.
 echo ============================================
-echo   L7S Workflow Analyzer - Build Script
+echo   L7S Workflow Capture - Build Script
 echo ============================================
 echo.
 
@@ -61,7 +61,7 @@ echo [4/4] Build complete!
 echo.
 echo ============================================
 echo   SUCCESS! Installer created at:
-echo   release\L7S Workflow Analyzer-*-x64.exe
+echo   release\L7S Workflow Capture-*-x64.exe
 echo ============================================
 echo.
 echo You can now send this installer to your boss!

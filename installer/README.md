@@ -1,4 +1,4 @@
-# L7S Workflow Analyzer - Installer
+# L7S Workflow Capture - Installer
 
 This directory contains the installer build system for Windows.
 
@@ -31,8 +31,8 @@ npm run dist:win
 ```
 
 This creates:
-- `release/L7S Workflow Analyzer-1.0.0-x64.exe` - NSIS installer
-- `release/L7S Workflow Analyzer-1.0.0-portable.exe` - Portable version
+- `release/L7S Workflow Capture-1.0.0-x64.exe` - NSIS installer
+- `release/L7S Workflow Capture-1.0.0-portable.exe` - Portable version
 - `release/win-unpacked/` - Unpacked application directory
 
 ### Docker smoke test (Wine)
@@ -40,7 +40,7 @@ This creates:
 Run the Windows installer headlessly inside Wine to ensure it installs cleanly:
 
 ```bash
-./docker/test-windows-installer.sh "release/L7S Workflow Analyzer-1.0.0-x64.exe"
+./docker/test-windows-installer.sh "release/L7S Workflow Capture-1.0.0-x64.exe"
 ```
 
 The script runs the installer silently and verifies files are written under `Program Files` in the Wine prefix.
@@ -55,7 +55,7 @@ build-installer.bat
 ## What the Installer Does
 
 ### 1. Application Installation
-- Installs L7S Workflow Analyzer to `C:\Program Files\Layer 7 Systems\Workflow Analyzer`
+- Installs L7S Workflow Capture to `C:\Program Files\Layer 7 Systems\Workflow Capture`
 - Creates Start Menu shortcuts
 - Creates optional Desktop shortcut
 - Registers uninstaller in Windows
@@ -130,12 +130,12 @@ The script automatically arranges monitors based on their Windows display settin
 ## Uninstallation
 
 The uninstaller:
-- Removes the L7S Workflow Analyzer application
+- Removes the L7S Workflow Capture application
 - Removes shortcuts and registry entries
 - **Preserves** OBS Studio installation
 - **Preserves** recordings in `C:\BandaStudy\`
 
 To fully clean up:
-1. Uninstall L7S Workflow Analyzer from Windows Settings
+1. Uninstall L7S Workflow Capture from Windows Settings
 2. Optionally uninstall OBS Studio separately
 3. Manually delete `C:\BandaStudy\` if desired

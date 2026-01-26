@@ -1,4 +1,4 @@
-# l7s-workflow-analyzer
+# l7s-workflow-capture
 
 Initialize an Electron + TypeScript project that captures screen recordings by managing OBS Studio as a child process.
 
@@ -7,7 +7,7 @@ Initialize an Electron + TypeScript project that captures screen recordings by m
 Electron is the **single supervisor**—it launches OBS, controls it via obs-websocket, and terminates it on exit. OBS never runs independently.
 
 ```
-l7s-workflow-analyzer/
+l7s-workflow-capture/
 ├── src/
 │   ├── main/
 │   │   ├── index.ts              # Entry, window, IPC, lifecycle

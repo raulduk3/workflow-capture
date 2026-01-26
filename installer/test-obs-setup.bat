@@ -6,7 +6,7 @@ REM ============================================
 
 echo.
 echo ============================================
-echo   L7S Workflow Analyzer - OBS Setup Test
+echo   L7S Workflow Capture - OBS Setup Test
 echo ============================================
 echo.
 echo This will test the OBS installation script.

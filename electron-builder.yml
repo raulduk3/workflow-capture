@@ -1,5 +1,5 @@
-appId: com.layer7.workflowanalyzer
-productName: L7S Workflow Analyzer
+appId: com.layer7.workflowcapture
+productName: L7S Workflow Capture
 copyright: Copyright © 2024 Layer 7 Systems
 
 directories:
@@ -32,7 +32,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: L7S Workflow Analyzer
+  shortcutName: L7S Workflow Capture
   license: LICENSE
   include: installer/nsis-include.nsh
   warningsAsErrors: false

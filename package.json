@@ -1,7 +1,7 @@
 {
-  "name": "l7s-workflow-analyzer",
+  "name": "l7s-workflow-capture",
   "version": "0.2.0",
-  "description": "Screen recording workflow analyzer using OBS Studio",
+  "description": "Screen recording workflow capture using OBS Studio",
   "main": "dist/main/index.js",
   "scripts": {
     "build": "tsc && npm run copy-assets",

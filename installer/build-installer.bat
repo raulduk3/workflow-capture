@@ -1,12 +1,12 @@
 @echo off
-REM L7S Workflow Analyzer - Windows Installer Build Script
+REM L7S Workflow Capture - Windows Installer Build Script
 REM This script builds the Electron app and creates the NSIS installer
 
 setlocal EnableDelayedExpansion
 
 echo.
 echo ============================================
-echo   L7S Workflow Analyzer - Build Installer
+echo   L7S Workflow Capture - Build Installer
 echo ============================================
 echo.
 
@@ -71,7 +71,7 @@ if %USE_NSIS%==1 (
     echo   Build Complete!
     echo ============================================
     echo.
-    echo Installer: release\L7S-Workflow-Analyzer-Setup-1.0.0.exe
+    echo Installer: release\L7S-Workflow-Capture-Setup-1.0.0.exe
 ) else (
     echo.
     echo [4/4] Skipping NSIS installer (not installed)

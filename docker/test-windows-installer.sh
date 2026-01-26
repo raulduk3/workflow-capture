@@ -35,6 +35,6 @@ docker run --rm \
     echo '' && \
     echo '=== Verifying key files ===' && \
     test -f /tmp/installer-test/\\\$PLUGINSDIR/app-64.7z && echo '✓ Found app-64.7z (main application archive)' && \
-    7z l /tmp/installer-test/\\\$PLUGINSDIR/app-64.7z | grep -E '(L7S Workflow Analyzer.exe|resources/app.asar)' && \
+    7z l /tmp/installer-test/\\\$PLUGINSDIR/app-64.7z | grep -E '(L7S Workflow Capture.exe|resources/app.asar)' && \
     echo '✓ Installer structure verified successfully'
   "

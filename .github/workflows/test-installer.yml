@@ -39,7 +39,7 @@ jobs:
       - name: Run installer silently
         shell: powershell
         run: |
-          $installer = Get-ChildItem -Path "release" -Filter "L7S Workflow Analyzer-*-x64.exe" | Select-Object -First 1
+          $installer = Get-ChildItem -Path "release" -Filter "L7S Workflow Capture-*-x64.exe" | Select-Object -First 1
           Write-Host "Running installer: $($installer.FullName)"
           
           # Run NSIS installer with silent flag
@@ -50,14 +50,14 @@ jobs:
       - name: Verify installation
         shell: powershell
         run: |
-          $installPath = "C:\Program Files\Layer 7 Systems\Workflow Analyzer"
+          $installPath = "C:\Program Files\Layer 7 Systems\Workflow Capture"
           
           Write-Host "Checking installation path: $installPath"
           
           if (Test-Path $installPath) {
             Write-Host "✓ Installation directory exists"
             
-            $exePath = Join-Path $installPath "L7S Workflow Analyzer.exe"
+            $exePath = Join-Path $installPath "L7S Workflow Capture.exe"
             if (Test-Path $exePath) {
               Write-Host "✓ Main executable found"
               $exeInfo = Get-Item $exePath
@@ -109,7 +109,7 @@ jobs:
       - name: Verify uninstaller exists
         shell: powershell
         run: |
-          $uninstallPath = "C:\Program Files\Layer 7 Systems\Workflow Analyzer\Uninstall L7S Workflow Analyzer.exe"
+          $uninstallPath = "C:\Program Files\Layer 7 Systems\Workflow Capture\Uninstall L7S Workflow Capture.exe"
           
           if (Test-Path $uninstallPath) {
             Write-Host "✓ Uninstaller found"
@@ -121,7 +121,7 @@ jobs:
       - name: Test uninstaller
         shell: powershell
         run: |
-          $uninstallPath = "C:\Program Files\Layer 7 Systems\Workflow Analyzer\Uninstall L7S Workflow Analyzer.exe"
+          $uninstallPath = "C:\Program Files\Layer 7 Systems\Workflow Capture\Uninstall L7S Workflow Capture.exe"
           
           Write-Host "Running uninstaller..."
           Start-Process -FilePath $uninstallPath -ArgumentList "/S" -Wait -NoNewWindow
@@ -131,7 +131,7 @@ jobs:
       - name: Verify uninstallation
         shell: powershell
         run: |
-          $installPath = "C:\Program Files\Layer 7 Systems\Workflow Analyzer"
+          $installPath = "C:\Program Files\Layer 7 Systems\Workflow Capture"
           
           if (Test-Path $installPath) {
             Write-Error "✗ Installation directory still exists after uninstall"

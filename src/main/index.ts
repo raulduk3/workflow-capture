@@ -58,7 +58,7 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
     },
-    title: 'L7S Workflow Analyzer',
+    title: 'L7S Workflow Capture',
   });
 
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));

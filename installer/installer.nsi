@@ -1,4 +1,4 @@
-; L7S Workflow Analyzer - NSIS Installer Script
+; L7S Workflow Capture - NSIS Installer Script
 ; This creates a full MSI-style installer with OBS setup
 
 !include "MUI2.nsh"
@@ -11,7 +11,7 @@
 ; Installer Configuration
 ; ============================================
 
-!define PRODUCT_NAME "L7S Workflow Analyzer"
+!define PRODUCT_NAME "L7S Workflow Capture"
 !define PRODUCT_VERSION "1.0.0"
 !define PRODUCT_PUBLISHER "Layer 7 Systems"
 !define PRODUCT_WEB_SITE "https://layer7systems.com"
@@ -19,8 +19,8 @@
 !define PRODUCT_UNINST_ROOT_KEY "HKLM"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
-OutFile "..\release\L7S-Workflow-Analyzer-Setup-${PRODUCT_VERSION}.exe"
-InstallDir "$PROGRAMFILES64\Layer 7 Systems\Workflow Analyzer"
+OutFile "..\release\L7S-Workflow-Capture-Setup-${PRODUCT_VERSION}.exe"
+InstallDir "$PROGRAMFILES64\Layer 7 Systems\Workflow Capture"
 InstallDirRegKey HKLM "${PRODUCT_UNINST_KEY}" "InstallLocation"
 RequestExecutionLevel admin
 ShowInstDetails show
@@ -49,7 +49,7 @@ ShowUnInstDetails show
 !define MUI_INSTFILESPAGE_COLORS "000000 FFFFFF"
 
 ; Finish page
-!define MUI_FINISHPAGE_RUN "$INSTDIR\L7S Workflow Analyzer.exe"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\L7S Workflow Capture.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Launch ${PRODUCT_NAME}"
 !define MUI_FINISHPAGE_SHOWREADME ""
 !define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
@@ -94,7 +94,7 @@ Section "Main Application" SecMain
     
     ; Create Start Menu shortcuts
     CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
-    CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\${PRODUCT_NAME}.lnk" "$INSTDIR\L7S Workflow Analyzer.exe"
+    CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\${PRODUCT_NAME}.lnk" "$INSTDIR\L7S Workflow Capture.exe"
     CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
     
     ; Write registry keys for uninstall
@@ -166,7 +166,7 @@ SectionEnd
 ; ============================================
 
 Function CreateDesktopShortcut
-    CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\L7S Workflow Analyzer.exe"
+    CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\L7S Workflow Capture.exe"
 FunctionEnd
 
 Function .onInit
@@ -198,7 +198,7 @@ FunctionEnd
 Section "Uninstall"
     
     ; Kill running application
-    nsExec::ExecToLog 'taskkill /F /IM "L7S Workflow Analyzer.exe"'
+    nsExec::ExecToLog 'taskkill /F /IM "L7S Workflow Capture.exe"'
     
     ; Remove application files
     RMDir /r "$INSTDIR"

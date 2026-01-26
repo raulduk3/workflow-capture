@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Configure OBS Studio for L7S Workflow Analyzer on macOS.
+Configure OBS Studio for L7S Workflow Capture on macOS.
 This replicates what the Windows installer does.
 Supports multi-monitor setups and auto-scales to fit.
 """
@@ -423,7 +423,7 @@ def create_scene_collection(displays, canvas_width, canvas_height):
 
 def main():
     print("=" * 50)
-    print("L7S Workflow Analyzer - OBS Configuration (macOS)")
+    print("L7S Workflow Capture - OBS Configuration (macOS)")
     print("=" * 50)
     print()
     

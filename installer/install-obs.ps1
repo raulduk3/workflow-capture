@@ -1,4 +1,4 @@
-# L7S Workflow Analyzer - OBS Studio Installation Script
+# L7S Workflow Capture - OBS Studio Installation Script
 # This script downloads and installs OBS Studio silently, then configures it for screen recording
 # 
 # EXISTING OBS INSTALLATIONS:
@@ -788,7 +788,7 @@ function Show-ExistingOBSWarning {
 function Main {
     Write-Host ""
     Write-Host "============================================" -ForegroundColor Cyan
-    Write-Host "  L7S Workflow Analyzer - OBS Setup" -ForegroundColor Cyan
+    Write-Host "  L7S Workflow Capture - OBS Setup" -ForegroundColor Cyan
     Write-Host "============================================" -ForegroundColor Cyan
     Write-Host ""
     

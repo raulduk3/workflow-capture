@@ -144,7 +144,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ needs.check-version.outputs.version }}
-          name: L7S Workflow Analyzer v${{ needs.check-version.outputs.version }}
+          name: L7S Workflow Capture v${{ needs.check-version.outputs.version }}
           draft: false
           prerelease: false
           body: |
@@ -152,12 +152,12 @@ jobs:
             
             | File | Description |
             |------|-------------|
-            | `L7S Workflow Analyzer-${{ needs.check-version.outputs.version }}-x64.exe` | Windows Installer (recommended) |
-            | `L7S Workflow Analyzer-${{ needs.check-version.outputs.version }}-portable.exe` | Portable version (no install required) |
+            | `L7S Workflow Capture-${{ needs.check-version.outputs.version }}-x64.exe` | Windows Installer (recommended) |
+            | `L7S Workflow Capture-${{ needs.check-version.outputs.version }}-portable.exe` | Portable version (no install required) |
             
             ## Installation
             
-            1. Download `L7S Workflow Analyzer-${{ needs.check-version.outputs.version }}-x64.exe`
+            1. Download `L7S Workflow Capture-${{ needs.check-version.outputs.version }}-x64.exe`
             2. Run the installer (requires admin privileges)
             3. The installer will automatically download and configure OBS Studio
             4. Launch from Start Menu or Desktop shortcut
@@ -166,7 +166,7 @@ jobs:
             
             SHA256 checksums are provided in `CHECKSUMS-SHA256.txt`. To verify on Windows PowerShell:
             ```powershell
-            Get-FileHash "L7S Workflow Analyzer-${{ needs.check-version.outputs.version }}-x64.exe" -Algorithm SHA256
+            Get-FileHash "L7S Workflow Capture-${{ needs.check-version.outputs.version }}-x64.exe" -Algorithm SHA256
             ```
             
             ## Requirements
