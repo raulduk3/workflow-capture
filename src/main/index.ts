@@ -305,8 +305,18 @@ if (!gotTheLock) {
     }
   });
 
+  let isQuitting = false;
+  
   app.on('before-quit', async (event) => {
-    log('App quitting...');
+    if (isQuitting) {
+      return; // Already handling quit
+    }
+    
+    // Prevent the app from quitting until we're done cleaning up
+    event.preventDefault();
+    isQuitting = true;
+    
+    log('App quitting - cleaning up...');
     
     stopRecordingTimer();
 
@@ -314,18 +324,27 @@ if (!gotTheLock) {
       try {
         const isRecording = await obsController.getRecordingStatus();
         if (isRecording) {
+          log('Stopping active recording...');
           await obsController.stopRecording();
           await sessionManager?.endCurrentSession();
         }
-      } catch {
-        // Ignore errors during shutdown
+      } catch (error) {
+        log(`Error during recording cleanup: ${error}`);
       }
+      
+      log('Disconnecting from OBS WebSocket...');
       obsController.disconnect();
     }
 
     if (obsSupervisor) {
+      log('Stopping OBS process...');
       await obsSupervisor.stop();
+      // Give OBS time to fully shut down and save its config
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
+    
+    log('Cleanup complete, quitting app');
+    app.exit(0);
   });
 
   app.on('window-all-closed', () => {
