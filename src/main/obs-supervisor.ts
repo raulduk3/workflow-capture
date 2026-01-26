@@ -360,29 +360,42 @@ export class ObsSupervisor extends EventEmitter {
 
     return new Promise((resolve) => {
       if (platform === 'darwin') {
-        // macOS: Request graceful quit via AppleScript, fallback to pkill
-        exec('osascript -e "tell application \"OBS\" to quit"', (quitErr) => {
-          if (quitErr) {
-            this.log(`AppleScript quit failed, falling back to pkill: ${quitErr.message}`);
-            exec('pkill -f "OBS.app/Contents/MacOS/OBS"', (error) => {
-              if (error) {
-                this.log(`pkill error (may be already stopped): ${error.message}`);
-              } else {
-                this.log('OBS stopped via pkill');
-              }
-              this.obsPid = null;
-              this.emit('obs-stopped');
-              resolve();
-            });
-          } else {
-            this.log('OBS requested to quit via AppleScript');
-            // Wait briefly to allow graceful shutdown
-            setTimeout(() => {
-              this.obsPid = null;
-              this.emit('obs-stopped');
-              resolve();
-            }, 1500);
+        // macOS: Use SIGTERM via pkill for reliable shutdown (AppleScript can fail with dialogs)
+        this.log('Sending SIGTERM to OBS...');
+        exec('pkill -TERM -f "OBS.app/Contents/MacOS/OBS"', (termError) => {
+          if (termError) {
+            this.log(`SIGTERM failed (OBS may already be stopped): ${termError.message}`);
+            this.removeCrashSentinel();
+            this.obsPid = null;
+            this.emit('obs-stopped');
+            resolve();
+            return;
           }
+          
+          this.log('SIGTERM sent, waiting for graceful shutdown...');
+          // Wait for OBS to shut down gracefully
+          let attempts = 0;
+          const maxAttempts = 10;
+          const checkInterval = setInterval(() => {
+            attempts++;
+            if (!this.isObsRunning()) {
+              clearInterval(checkInterval);
+              this.log('OBS shut down gracefully');
+              this.removeCrashSentinel();
+              this.obsPid = null;
+              this.emit('obs-stopped');
+              resolve();
+            } else if (attempts >= maxAttempts) {
+              clearInterval(checkInterval);
+              this.log('OBS still running after SIGTERM, force killing...');
+              exec('pkill -KILL -f "OBS.app/Contents/MacOS/OBS"', () => {
+                this.removeCrashSentinel();
+                this.obsPid = null;
+                this.emit('obs-stopped');
+                resolve();
+              });
+            }
+          }, 500);
         });
       } else {
         const forceKillTimeout = setTimeout(() => {
