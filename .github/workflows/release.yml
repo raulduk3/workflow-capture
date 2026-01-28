@@ -78,7 +78,10 @@ jobs:
             Write-Host "$hash  $($file.Name)"
           }
           
-          $checksums | Out-File -FilePath $checksumFile -Encoding UTF8
+          # Write with Unix line endings (LF) for sha256sum compatibility
+          $checksums -join "`n" | Set-Content -Path $checksumFile -NoNewline -Encoding UTF8
+          # Add final newline
+          Add-Content -Path $checksumFile -Value "" -NoNewline
           Write-Host ""
           Write-Host "Checksums written to $checksumFile"
       
@@ -119,7 +122,13 @@ jobs:
         run: |
           echo "=== Verifying artifact integrity ==="
           cd ./artifacts
+          # Convert any CRLF to LF for sha256sum compatibility
+          sed -i 's/\r$//' CHECKSUMS-SHA256.txt
+          echo "=== Checksum file contents ==="
           cat CHECKSUMS-SHA256.txt
+          echo ""
+          echo "=== Files in directory ==="
+          ls -la
           echo ""
           echo "=== Verifying SHA256 hashes ==="
           sha256sum -c CHECKSUMS-SHA256.txt
