@@ -10,17 +10,23 @@ files:
   - dist/**/*
   - package.json
 
+extraResources:
+  - from: build/icon.ico
+    to: icon.ico
+
 win:
   target:
     - target: nsis
       arch:
         - x64
   artifactName: L7S-Workflow-Capture-${version}-${arch}.${ext}
+  requestedExecutionLevel: asInvoker
 
 nsis:
   oneClick: true
   perMachine: false
   allowElevation: false
+  runAfterFinish: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Workflow Capture

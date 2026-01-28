@@ -40,7 +40,14 @@ function log(message: string): void {
 
 function sendStatus(status: SystemStatus): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('system-status', status);
+    // Ensure webContents is ready before sending
+    if (mainWindow.webContents.isLoading()) {
+      mainWindow.webContents.once('did-finish-load', () => {
+        mainWindow?.webContents.send('system-status', status);
+      });
+    } else {
+      mainWindow.webContents.send('system-status', status);
+    }
   }
 }
 
@@ -101,32 +108,38 @@ function createWindow(): void {
 }
 
 function createTray(): void {
-  // Create a simple 16x16 icon (red circle for recording indicator style)
-  const iconSize = 16;
-  const icon = nativeImage.createEmpty();
+  // Use the app icon for the tray
+  let iconPath: string;
   
-  // For Windows, we need a proper icon. Create a simple colored square.
-  const canvas = Buffer.alloc(iconSize * iconSize * 4);
-  for (let i = 0; i < iconSize * iconSize; i++) {
-    const x = i % iconSize;
-    const y = Math.floor(i / iconSize);
-    const centerX = iconSize / 2;
-    const centerY = iconSize / 2;
-    const radius = iconSize / 2 - 1;
-    const distance = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
-    
-    if (distance <= radius) {
-      // Blue color for L7S branding
-      canvas[i * 4] = 74;      // R
-      canvas[i * 4 + 1] = 158; // G
-      canvas[i * 4 + 2] = 255; // B
-      canvas[i * 4 + 3] = 255; // A
-    } else {
-      canvas[i * 4 + 3] = 0;   // Transparent
-    }
+  if (app.isPackaged) {
+    // In packaged app, use resources directory
+    iconPath = path.join(process.resourcesPath, 'icon.ico');
+  } else {
+    // In development, use build directory
+    iconPath = path.join(__dirname, '..', '..', 'build', 'icon.ico');
   }
   
-  const trayIcon = nativeImage.createFromBuffer(canvas, { width: iconSize, height: iconSize });
+  let trayIcon: Electron.NativeImage;
+  
+  // Check if icon file exists
+  if (fs.existsSync(iconPath)) {
+    trayIcon = nativeImage.createFromPath(iconPath);
+    // Resize for tray (16x16 on Windows, varies on other platforms)
+    trayIcon = trayIcon.resize({ width: 16, height: 16 });
+  } else {
+    // Fallback: create a simple icon programmatically
+    log(`Icon not found at ${iconPath}, using fallback`);
+    const size = 16;
+    const canvas = Buffer.alloc(size * size * 4);
+    for (let i = 0; i < size * size; i++) {
+      canvas[i * 4] = 74;      // R
+      canvas[i * 4 + 1] = 158; // G  
+      canvas[i * 4 + 2] = 255; // B
+      canvas[i * 4 + 3] = 255; // A
+    }
+    trayIcon = nativeImage.createFromBuffer(canvas, { width: size, height: size });
+  }
+  
   tray = new Tray(trayIcon);
   
   const contextMenu = Menu.buildFromTemplate([
@@ -177,21 +190,30 @@ function createTray(): void {
 async function initialize(): Promise<void> {
   sendStatus({ state: 'starting', message: 'Initializing...' });
 
-  // Initialize file manager
-  fileManager = new FileManager();
-  await fileManager.ensureSessionsDirectory();
-  log('File manager initialized');
+  try {
+    // Initialize file manager
+    log('Initializing file manager...');
+    fileManager = new FileManager();
+    await fileManager.ensureSessionsDirectory();
+    log('File manager initialized');
 
-  // Initialize session manager
-  sessionManager = new SessionManager(fileManager);
-  log('Session manager initialized');
+    // Initialize session manager
+    log('Initializing session manager...');
+    sessionManager = new SessionManager(fileManager);
+    log('Session manager initialized');
 
-  // Initialize native recorder
-  nativeRecorder = new NativeRecorder();
-  log('Native recorder initialized');
+    // Initialize native recorder
+    log('Initializing native recorder...');
+    nativeRecorder = new NativeRecorder();
+    log('Native recorder initialized');
 
-  sendStatus({ state: 'idle', message: 'Ready' });
-  log('System ready');
+    sendStatus({ state: 'idle', message: 'Ready' });
+    log('System ready');
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    log(`Initialization error: ${errorMessage}`);
+    sendStatus({ state: 'error', message: 'Initialization failed', error: errorMessage });
+  }
 }
 
 function startRecordingTimer(): void {
