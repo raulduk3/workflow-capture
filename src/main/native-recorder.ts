@@ -1,32 +1,9 @@
-import { desktopCapturer, screen, BrowserWindow, ipcMain, app } from 'electron';
+import { desktopCapturer, screen, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
-import * as fs from 'fs';
-import ffmpegPathModule from 'ffmpeg-static';
-import { spawn } from 'child_process';
 
-/**
- * Get the correct ffmpeg path for both development and packaged app
- */
-function getFFmpegPath(): string | null {
-  // In packaged app, ffmpeg-static path needs adjustment
-  if (app.isPackaged && ffmpegPathModule) {
-    // The path from ffmpeg-static points to node_modules inside asar
-    // We need to point to the unpacked version
-    const unpackedPath = ffmpegPathModule.replace('app.asar', 'app.asar.unpacked');
-    if (fs.existsSync(unpackedPath)) {
-      return unpackedPath;
-    }
-    // Try the original path as fallback
-    if (fs.existsSync(ffmpegPathModule)) {
-      return ffmpegPathModule;
-    }
-    console.log('[NativeRecorder] FFmpeg not found at:', unpackedPath, 'or', ffmpegPathModule);
-    return null;
-  }
-  return ffmpegPathModule;
-}
+// Note: ffmpeg-static kept as dependency for future batch MP4 conversion utility
 
-const ffmpegPath = getFFmpegPath();
+// Note: ffmpeg-static kept as dependency for future batch MP4 conversion utility
 
 export interface RecorderStatus {
   isRecording: boolean;
@@ -40,13 +17,13 @@ interface CaptureStoppedResult {
 
 /**
  * Native screen recorder using Electron's desktopCapturer API
- * Records all screens as a single video, saves as MP4
+ * Records all screens as a single video, saves as WebM (VP9)
+ * WebM is kept as primary format for best quality - convert to MP4 later if needed
  */
 export class NativeRecorder {
   private isRecording = false;
   private outputDir: string | null = null;
-  private tempWebmPath: string | null = null;
-  private finalMp4Path: string | null = null;
+  private outputWebmPath: string | null = null;
   private captureStoppedResolver: ((result: CaptureStoppedResult) => void) | null = null;
 
   constructor() {
@@ -155,18 +132,16 @@ export class NativeRecorder {
     
     this.log(`Selected source for recording: "${selectedSource.name}" (${selectedSource.id})`);
     
-    // Set up output paths
+    // Set up output path - keep as WebM for best quality
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    this.tempWebmPath = path.join(this.outputDir, `recording_${timestamp}.webm`);
-    this.finalMp4Path = path.join(this.outputDir, `recording_${timestamp}.mp4`);
+    this.outputWebmPath = path.join(this.outputDir, `recording_${timestamp}.webm`);
 
-    this.log(`Temp WebM: ${this.tempWebmPath}`);
-    this.log(`Final MP4: ${this.finalMp4Path}`);
+    this.log(`Output WebM: ${this.outputWebmPath}`);
 
     // Send start command to renderer with source ID
     mainWindow.webContents.send('start-capture', {
       sourceId: selectedSource.id,
-      outputPath: this.tempWebmPath,
+      outputPath: this.outputWebmPath,
     });
 
     this.isRecording = true;
@@ -200,99 +175,17 @@ export class NativeRecorder {
           return;
         }
 
-        try {
-          // Convert WebM to MP4
-          const conversionSuccess = await this.convertToMp4();
-          
-          let outputPath: string;
-          
-          if (conversionSuccess && this.finalMp4Path && fs.existsSync(this.finalMp4Path)) {
-            // Clean up temp WebM file only if MP4 was created successfully
-            if (this.tempWebmPath && fs.existsSync(this.tempWebmPath)) {
-              fs.unlinkSync(this.tempWebmPath);
-              this.log('Cleaned up temp WebM file');
-            }
-            outputPath = this.finalMp4Path;
-          } else {
-            // Fallback: keep the WebM file if conversion failed
-            this.log('MP4 conversion failed, keeping WebM file');
-            outputPath = this.tempWebmPath!;
-          }
+        // Keep WebM as primary format - no conversion needed
+        const outputPath = this.outputWebmPath!;
+        this.log(`Recording saved as WebM: ${outputPath}`);
 
-          this.isRecording = false;
-          this.tempWebmPath = null;
-          this.finalMp4Path = null;
-          
-          resolve(outputPath);
-        } catch (error) {
-          this.isRecording = false;
-          reject(error);
-        }
+        this.isRecording = false;
+        this.outputWebmPath = null;
+        
+        resolve(outputPath);
       };
 
       mainWindow.webContents.send('stop-capture');
-    });
-  }
-
-  /**
-   * Convert WebM to MP4 using ffmpeg
-   * Returns true if successful, false if conversion failed
-   */
-  private async convertToMp4(): Promise<boolean> {
-    if (!this.tempWebmPath || !this.finalMp4Path) {
-      this.log('Output paths not set for conversion');
-      return false;
-    }
-
-    if (!fs.existsSync(this.tempWebmPath)) {
-      this.log(`WebM file not found: ${this.tempWebmPath}`);
-      return false;
-    }
-
-    if (!ffmpegPath) {
-      this.log('FFmpeg binary not found - ffmpeg-static may not be installed correctly');
-      return false;
-    }
-
-    this.log(`Converting to MP4: ${this.tempWebmPath} -> ${this.finalMp4Path}`);
-    this.log(`Using FFmpeg at: ${ffmpegPath}`);
-
-    return new Promise((resolve) => {
-      try {
-        const ffmpeg = spawn(ffmpegPath!, [
-          '-i', this.tempWebmPath!,
-          '-c:v', 'libx264',
-          '-preset', 'fast',
-          '-crf', '23',
-          '-y', // Overwrite output file
-          this.finalMp4Path!,
-        ]);
-
-        let stderr = '';
-
-        ffmpeg.stderr.on('data', (data) => {
-          stderr += data.toString();
-        });
-
-        ffmpeg.on('close', (code) => {
-          if (code === 0) {
-            this.log('MP4 conversion complete');
-            resolve(true);
-          } else {
-            this.log(`FFmpeg exited with code ${code}`);
-            this.log(`FFmpeg stderr: ${stderr.slice(-500)}`);
-            resolve(false);
-          }
-        });
-
-        ffmpeg.on('error', (err) => {
-          this.log(`Failed to run FFmpeg: ${err.message}`);
-          resolve(false);
-        });
-      } catch (err) {
-        this.log(`Exception spawning FFmpeg: ${err}`);
-        resolve(false);
-      }
     });
   }
 
@@ -302,7 +195,7 @@ export class NativeRecorder {
   public getStatus(): RecorderStatus {
     return {
       isRecording: this.isRecording,
-      outputPath: this.finalMp4Path || undefined,
+      outputPath: this.outputWebmPath || undefined,
     };
   }
 
