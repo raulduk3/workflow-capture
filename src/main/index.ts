@@ -75,6 +75,7 @@ function createWindow(): void {
     maximizable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
+    show: true,
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload.js'),
       contextIsolation: true,
@@ -85,6 +86,12 @@ function createWindow(): void {
 
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   mainWindow.setMenu(null);
+
+  // Ensure window is shown and focused on startup
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show();
+    mainWindow?.focus();
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
