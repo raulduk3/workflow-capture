@@ -1,6 +1,6 @@
 {
   "name": "l7s-workflow-capture",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Screen recording workflow capture using OBS Studio",
   "main": "dist/main/index.js",
   "scripts": {

@@ -565,7 +565,7 @@ export class ObsSupervisor extends EventEmitter {
     }
 
     // Log summary
-    this.log(`[Diagnostics] === Summary ===");
+    this.log(`[Diagnostics] === Summary ===`);
     this.log(`[Diagnostics] OBS Installed: ${report.obsInstalled}`);
     this.log(`[Diagnostics] Profile Exists: ${report.profileExists}`);
     this.log(`[Diagnostics] Scene Collection Exists: ${report.sceneCollectionExists}`);
