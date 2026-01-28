@@ -151,22 +151,25 @@ jobs:
             | File | Description |
             |------|-------------|
             | `Workflow Capture-${{ needs.check-version.outputs.version }}-x64.exe` | Windows Installer |
+            
             ## Installation
             
-            1. Download `Workflow Capture-${{ needs.check-version.outputs.version }}-x64.exe`
-            2. Run the installer
+            1. Download the installer for your platform
+            2. Run the installer (Windows)
+            3. Grant screen recording permissions when prompted
             
             ## Verify Download Integrity
             
-            SHA256 checksums are provided in `CHECKSUMS-SHA256.txt`. To verify on Windows PowerShell:
+            SHA256 checksums are provided in `CHECKSUMS-SHA256.txt`. To verify:
+            
+            **Windows PowerShell:**
             ```powershell
             Get-FileHash "Workflow Capture-${{ needs.check-version.outputs.version }}-x64.exe" -Algorithm SHA256
             ```
-            
             ## Requirements
             
-            - Windows 10 or later (64-bit)
-            - Internet connection (for initial OBS download)
+            - Windows 10/11 (64-bit)
+            - Screen recording permissions
             
           files: ./artifacts/*
         env:

@@ -1,61 +1,43 @@
 # Workflow Capture
 
-Screen recording workflow capture using OBS Studio. Captures screen recordings with session metadata for workflow analysis.
+Native screen recording application for workflow capture and analysis. Records all connected screens as MP4 video with session metadata.
 
 ## Download
 
 Download the latest Windows release from the [Releases](../../releases) page:
 
-- **Windows**: `L7S-Workflow-Capture-x.x.x-x64.exe` (NSIS Installer)
-- **Windows Portable**: `L7S-Workflow-Capture-x.x.x-portable.exe`
+- **Windows**: `Workflow Capture-x.x.x-x64.exe` (NSIS Installer)
 
-## What the Installer Does
+## Features
 
-### Automatic OBS Setup
-The installer automatically:
-- Downloads and installs OBS Studio (if not already installed)
-- Configures WebSocket server on port 4455 (no authentication)
-- Creates an "L7S-ScreenCapture" profile with optimal settings
-- Sets up screen capture for all connected monitors
-- Configures desktop audio capture
-
-### Existing OBS Installations
-If you already have OBS installed:
-- Your existing OBS installation is **preserved** (not reinstalled)
-- Your existing profiles and scenes are **not modified**
-- A new "L7S-ScreenCapture" profile is **added alongside** your profiles
-- Your default OBS profile is **not changed**
-- Only the WebSocket server setting is enabled
+- **Native Screen Recording** - Uses Electron's desktopCapturer API with FFmpeg
+- **Multi-Monitor Support** - Captures all connected displays as a single video
+- **Session Management** - Organize recordings with notes and metadata
+- **ZIP Export** - Export sessions as portable ZIP archives
+- **System Tray** - Runs in the background with quick access controls
+- **No External Dependencies** - Everything bundled in the installer
 
 ## Development
 
 ### Prerequisites
-- Node.js 18+
+- Node.js 20+
 - npm
 
 ### Setup
 ```bash
 npm install
 npm run build
-npm run start
+npm start
 ```
 
 ### Build Installers
 ```bash
 # Windows
 npm run dist:win
+
+# macOS
+npm run dist:mac
 ```
-
-### Docker Smoke Test (Windows installer)
-
-After building, you can run the installer inside Wine via Docker to ensure it installs cleanly:
-
-```bash
-# Example after building to release/...
-./docker/test-windows-installer.sh "release/Workflow Capture-0.1.2-x64.exe"
-```
-
-This runs the NSIS installer silently, verifies the app files were written under `Program Files`, and tears down the container afterward. On macOS/Linux hosts this avoids needing a local Wine install.
 
 ## Releases
 
@@ -77,8 +59,7 @@ This will automatically:
 src/
 ├── main/
 │   ├── index.ts              # Entry, window, IPC, lifecycle
-│   ├── obs-supervisor.ts     # Spawn/monitor/restart OBS process
-│   ├── obs-controller.ts     # WebSocket commands to OBS
+│   ├── native-recorder.ts    # Screen capture with desktopCapturer + FFmpeg
 │   ├── session-manager.ts    # Recording sessions with metadata
 │   └── file-manager.ts       # Directory structure, ZIP export
 ├── renderer/
@@ -98,17 +79,11 @@ Each session contains:
 - `video.mp4` - Screen recording
 - `session.json` - Metadata (timestamps, notes, machine name)
 
-**Note for Windows 11 Pro users:** The application uses the system temp directory to avoid permission issues. If you need recordings in a different location, they are automatically organized by session and can be exported as a ZIP file from the application.
+## System Requirements
 
-## Windows 11 Pro Compatibility
-
-This application is fully compatible with Windows 11 Pro. Key features:
-
-- **No admin privileges required** for normal operation (recordings use temp directory)
-- **Firewall configuration** is automatic when installer runs as administrator
-  - If not running as admin, WebSocket will work locally but firewall rule must be added manually if needed
-- **Multi-user support** - OBS configuration is created per-user on first run
-- **Automatic profile switching** - Uses WebSocket API to ensure correct OBS profile/scenes are active
+- Windows 10/11 (64-bit)
+- macOS 10.15+ (Catalina or later)
+- Screen recording permissions (macOS will prompt on first use)
 
 ## License
 
