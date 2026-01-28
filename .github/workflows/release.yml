@@ -62,7 +62,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Generate checksums
-        shell: powershell
+        shell: pwsh
         run: |
           $version = "${{ needs.check-version.outputs.version }}"
           $checksumFile = "release/CHECKSUMS-SHA256.txt"
@@ -70,18 +70,17 @@ jobs:
           Write-Host "Generating SHA256 checksums..."
           
           $files = Get-ChildItem -Path "release" -Filter "*.exe"
-          $checksums = @()
+          $lines = @()
           
           foreach ($file in $files) {
             $hash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash.ToLower()
-            $checksums += "$hash  $($file.Name)"
+            $lines += "$hash  $($file.Name)"
             Write-Host "$hash  $($file.Name)"
           }
           
-          # Write with Unix line endings (LF) for sha256sum compatibility
-          $checksums -join "`n" | Set-Content -Path $checksumFile -NoNewline -Encoding UTF8
-          # Add final newline
-          Add-Content -Path $checksumFile -Value "" -NoNewline
+          # Write with Unix line endings (LF) and no BOM for sha256sum compatibility
+          $content = ($lines -join "`n") + "`n"
+          [System.IO.File]::WriteAllText($checksumFile, $content)
           Write-Host ""
           Write-Host "Checksums written to $checksumFile"
       
