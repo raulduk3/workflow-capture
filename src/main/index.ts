@@ -51,7 +51,8 @@ function getSessionsPath(): string {
   let sessionsPath: string;
   
   if (platform === 'win32') {
-    sessionsPath = path.join(os.tmpdir(), 'L7SWorkflowCapture', 'Sessions');
+    const appDataPath = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    sessionsPath = path.join(appDataPath, 'L7SWorkflowCapture', 'Sessions');
   } else {
     sessionsPath = path.join(os.homedir(), 'L7SWorkflowCapture', 'Sessions');
   }

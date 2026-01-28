@@ -12,11 +12,13 @@ export class FileManager {
     const platform = os.platform();
     
     if (platform === 'win32') {
-      this.sessionsPath = 'C:\\BandaStudy\\Sessions';
+      // Use AppData/Local for Windows - user-writable without admin permissions
+      const appDataPath = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+      this.sessionsPath = path.join(appDataPath, 'L7SWorkflowCapture', 'Sessions');
     } else if (platform === 'darwin') {
-      this.sessionsPath = path.join(os.homedir(), 'BandaStudy', 'Sessions');
+      this.sessionsPath = path.join(os.homedir(), 'L7SWorkflowCapture', 'Sessions');
     } else {
-      this.sessionsPath = path.join(os.homedir(), 'BandaStudy', 'Sessions');
+      this.sessionsPath = path.join(os.homedir(), 'L7SWorkflowCapture', 'Sessions');
     }
   }
 
@@ -29,12 +31,19 @@ export class FileManager {
   }
 
   public async ensureSessionsDirectory(): Promise<void> {
+    this.log(`Ensuring sessions directory at: ${this.sessionsPath}`);
     try {
       await fs.access(this.sessionsPath);
       this.log(`Sessions directory exists: ${this.sessionsPath}`);
     } catch {
-      await fs.mkdir(this.sessionsPath, { recursive: true });
-      this.log(`Sessions directory created: ${this.sessionsPath}`);
+      try {
+        await fs.mkdir(this.sessionsPath, { recursive: true });
+        this.log(`Sessions directory created: ${this.sessionsPath}`);
+      } catch (mkdirError) {
+        const errorMessage = mkdirError instanceof Error ? mkdirError.message : String(mkdirError);
+        this.log(`Failed to create sessions directory: ${errorMessage}`);
+        throw new Error(`Cannot create sessions directory at ${this.sessionsPath}: ${errorMessage}`);
+      }
     }
   }
 
@@ -62,7 +71,7 @@ export class FileManager {
 
     const hostname = os.hostname();
     const date = new Date().toISOString().split('T')[0];
-    const zipFilename = `BandaStudy_${hostname}_${date}.zip`;
+    const zipFilename = `L7SWorkflowCapture_${hostname}_${date}.zip`;
     
     // Export to user's Downloads folder or home directory
     const platform = os.platform();
