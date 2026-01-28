@@ -1,5 +1,5 @@
 interface SystemStatus {
-  state: 'starting' | 'idle' | 'recording' | 'error';
+  state: 'starting' | 'idle' | 'recording' | 'processing' | 'error';
   message: string;
   recordingDuration?: number;
   error?: string;
@@ -81,6 +81,16 @@ function updateUI(status: SystemStatus): void {
       if (status.recordingDuration !== undefined) {
         timer.textContent = formatDuration(status.recordingDuration);
       }
+      break;
+
+    case 'processing':
+      isRecording = false;
+      recordBtn.disabled = true;
+      recordBtn.classList.remove('recording');
+      recordBtnText.textContent = 'Processing...';
+      taskNote.disabled = true;
+      timerDisplay.classList.add('hidden');
+      errorContainer.classList.add('hidden');
       break;
 
     case 'error':

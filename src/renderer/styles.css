@@ -76,6 +76,11 @@ header h1 {
   animation: pulse 1s infinite;
 }
 
+.status-indicator.processing .status-dot {
+  background-color: var(--warning-color);
+  animation: pulse 0.8s infinite;
+}
+
 .status-indicator.reconnecting .status-dot {
   background-color: var(--warning-color);
   animation: pulse 1s infinite;

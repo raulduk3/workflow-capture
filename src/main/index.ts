@@ -16,7 +16,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // Types
-export type SystemState = 'starting' | 'idle' | 'recording' | 'error';
+export type SystemState = 'starting' | 'idle' | 'recording' | 'processing' | 'error';
 
 export interface SystemStatus {
   state: SystemState;
@@ -128,23 +128,23 @@ function updateTrayMenu(): void {
         if (isRecording && nativeRecorder && mainWindow) {
           try {
             stopRecordingTimer();
-            sendStatus({ state: 'starting', message: 'Processing...' });
             
-            const outputPath = await nativeRecorder.stopRecording(mainWindow);
-            
+            // Show window immediately with processing state
             mainWindow.show();
             mainWindow.focus();
+            sendStatus({ state: 'processing', message: 'Processing video...' });
+            updateTrayMenu();
+            
+            // Process recording in background
+            const outputPath = await nativeRecorder.stopRecording(mainWindow);
             
             await sessionManager?.endCurrentSession();
             sendStatus({ state: 'idle', message: 'Ready' });
-            updateTrayMenu();
             
             log(`Recording stopped via tray menu, saved to: ${outputPath}`);
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
             log(`Failed to stop recording via tray menu: ${errorMessage}`);
-            mainWindow.show();
-            mainWindow.focus();
             sendStatus({ state: 'idle', message: 'Ready' });
             updateTrayMenu();
           }
@@ -221,23 +221,23 @@ function createTray(): void {
       // Stop recording on tray click
       try {
         stopRecordingTimer();
-        sendStatus({ state: 'starting', message: 'Processing...' });
         
-        const outputPath = await nativeRecorder.stopRecording(mainWindow);
-        
+        // Show window immediately with processing state
         mainWindow.show();
         mainWindow.focus();
+        sendStatus({ state: 'processing', message: 'Processing video...' });
+        updateTrayMenu();
+        
+        // Process recording in background
+        const outputPath = await nativeRecorder.stopRecording(mainWindow);
         
         await sessionManager?.endCurrentSession();
         sendStatus({ state: 'idle', message: 'Ready' });
-        updateTrayMenu();
         
         log(`Recording stopped via tray, saved to: ${outputPath}`);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         log(`Failed to stop recording via tray: ${errorMessage}`);
-        mainWindow?.show();
-        mainWindow?.focus();
         sendStatus({ state: 'idle', message: 'Ready' });
         updateTrayMenu();
       }
@@ -342,30 +342,26 @@ function setupIpcHandlers(): void {
 
       // Stop the timer immediately so user sees feedback
       stopRecordingTimer();
-      sendStatus({ state: 'starting', message: 'Processing...' });
-
-      const outputPath = await nativeRecorder.stopRecording(mainWindow);
       
-      // Show window after recording stops
+      // Show window immediately with processing state
       mainWindow.show();
       mainWindow.focus();
+      sendStatus({ state: 'processing', message: 'Processing video...' });
+      
+      // Update tray to show we're no longer recording
+      updateTrayMenu();
+
+      // Process recording (conversion happens in background while UI is responsive)
+      const outputPath = await nativeRecorder.stopRecording(mainWindow);
       
       await sessionManager.endCurrentSession();
       sendStatus({ state: 'idle', message: 'Ready' });
-      
-      // Update tray to show idle state
-      updateTrayMenu();
       
       log(`Recording stopped, saved to: ${outputPath}`);
       return { success: true, path: outputPath };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       log(`Failed to stop recording: ${errorMessage}`);
-      // Show window on error
-      if (mainWindow) {
-        mainWindow.show();
-        mainWindow.focus();
-      }
       // Reset to idle state on error so user can try again
       sendStatus({ state: 'idle', message: 'Ready' });
       // Update tray to show idle state
