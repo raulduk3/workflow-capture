@@ -1,6 +1,6 @@
 appId: com.layer7.workflowcapture
-productName: L7S Workflow Capture
-copyright: Copyright © 2024 Layer 7 Systems
+productName: Workflow Capture
+copyright: Copyright © 2026 Layer 7 Systems
 
 directories:
   output: release
@@ -10,35 +10,40 @@ files:
   - dist/**/*
   - package.json
 
-extraResources:
-  - from: installer/install-obs.ps1
-    to: setup/install-obs.ps1
-    filter:
-      - "**/*"
-
 win:
   target:
     - target: nsis
       arch:
         - x64
-    - target: portable
-      arch:
-        - x64
   artifactName: ${productName}-${version}-${arch}.${ext}
 
 nsis:
-  oneClick: false
-  perMachine: true
-  allowToChangeInstallationDirectory: true
+  oneClick: true
+  perMachine: false
+  allowElevation: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: L7S Workflow Capture
-  license: LICENSE
+  shortcutName: Workflow Capture
   include: installer/nsis-include.nsh
   warningsAsErrors: false
 
-portable:
-  artifactName: ${productName}-${version}-portable.${ext}
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  category: public.app-category.productivity
+
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
 
 asar: true
 compression: maximum

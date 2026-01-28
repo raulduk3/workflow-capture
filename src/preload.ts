@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 export interface SystemStatus {
-  state: 'starting' | 'idle' | 'recording' | 'reconnecting' | 'error';
+  state: 'starting' | 'idle' | 'recording' | 'error';
   message: string;
   recordingDuration?: number;
   error?: string;
@@ -12,27 +12,16 @@ export interface IpcResult {
   error?: string;
   sessionId?: string;
   path?: string;
-  report?: ObsDiagnosticReport;
 }
 
-export interface ObsDiagnosticReport {
-  timestamp: string;
-  platform: string;
-  obsInstalled: boolean;
-  obsPath: string;
-  obsPathExists: boolean;
-  profileExists: boolean;
-  profilePath: string;
-  sceneCollectionExists: boolean;
-  sceneCollectionPath: string;
-  globalConfigExists: boolean;
-  globalConfigPath: string;
-  webSocketEnabled: boolean;
-  webSocketPort: number;
-  sessionsDirectoryExists: boolean;
-  sessionsPath: string;
-  issues: string[];
-  warnings: string[];
+export interface CaptureConfig {
+  sourceId: string;
+  outputPath: string;
+}
+
+export interface CaptureStoppedResult {
+  success: boolean;
+  error?: string;
 }
 
 export interface ElectronAPI {
@@ -41,9 +30,11 @@ export interface ElectronAPI {
   getStatus: () => Promise<SystemStatus>;
   openSessionsFolder: () => Promise<IpcResult>;
   exportSessions: () => Promise<IpcResult>;
-  retryConnection: () => Promise<IpcResult>;
-  runDiagnostics: () => Promise<IpcResult>;
+  saveRecordingData: (data: ArrayBuffer, outputPath: string) => Promise<IpcResult>;
+  notifyCaptureStopped: (result: CaptureStoppedResult) => Promise<void>;
   onStatusUpdate: (callback: (status: SystemStatus) => void) => void;
+  onStartCapture: (callback: (config: CaptureConfig) => void) => void;
+  onStopCapture: (callback: () => void) => void;
 }
 
 const electronAPI: ElectronAPI = {
@@ -52,11 +43,23 @@ const electronAPI: ElectronAPI = {
   getStatus: () => ipcRenderer.invoke('get-status'),
   openSessionsFolder: () => ipcRenderer.invoke('open-sessions-folder'),
   exportSessions: () => ipcRenderer.invoke('export-sessions'),
-  retryConnection: () => ipcRenderer.invoke('retry-connection'),
-  runDiagnostics: () => ipcRenderer.invoke('run-diagnostics'),
+  saveRecordingData: (data: ArrayBuffer, outputPath: string) => 
+    ipcRenderer.invoke('save-recording-chunk', data, outputPath),
+  notifyCaptureStopped: (result: CaptureStoppedResult) => 
+    ipcRenderer.invoke('capture-stopped', result),
   onStatusUpdate: (callback: (status: SystemStatus) => void) => {
     ipcRenderer.on('system-status', (_event, status: SystemStatus) => {
       callback(status);
+    });
+  },
+  onStartCapture: (callback: (config: CaptureConfig) => void) => {
+    ipcRenderer.on('start-capture', (_event, config: CaptureConfig) => {
+      callback(config);
+    });
+  },
+  onStopCapture: (callback: () => void) => {
+    ipcRenderer.on('stop-capture', () => {
+      callback();
     });
   },
 };

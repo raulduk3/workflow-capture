@@ -1,17 +1,14 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, screen } from 'electron';
 import * as path from 'path';
-import { ObsSupervisor } from './obs-supervisor';
-import { ObsController } from './obs-controller';
+import * as fs from 'fs';
+import * as os from 'os';
+import { NativeRecorder } from './native-recorder';
 import { SessionManager } from './session-manager';
 import { FileManager } from './file-manager';
 
-// Global error handlers to prevent uncaught exceptions from crashing the app
+// Global error handlers
 process.on('uncaughtException', (error) => {
   console.error('[Main] Uncaught Exception:', error.message);
-  // Don't crash the app for connection errors - they're handled by retry logic
-  if (error.message.includes('ECONNREFUSED')) {
-    console.log('[Main] OBS connection refused - OBS may not be running yet');
-  }
 });
 
 process.on('unhandledRejection', (reason, promise) => {
@@ -19,7 +16,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // Types
-export type SystemState = 'starting' | 'idle' | 'recording' | 'reconnecting' | 'error';
+export type SystemState = 'starting' | 'idle' | 'recording' | 'error';
 
 export interface SystemStatus {
   state: SystemState;
@@ -30,8 +27,7 @@ export interface SystemStatus {
 
 // Globals
 let mainWindow: BrowserWindow | null = null;
-let obsSupervisor: ObsSupervisor | null = null;
-let obsController: ObsController | null = null;
+let nativeRecorder: NativeRecorder | null = null;
 let sessionManager: SessionManager | null = null;
 let fileManager: FileManager | null = null;
 let recordingStartTime: number | null = null;
@@ -47,10 +43,32 @@ function sendStatus(status: SystemStatus): void {
   }
 }
 
+/**
+ * Get the sessions directory path
+ */
+function getSessionsPath(): string {
+  const platform = os.platform();
+  let sessionsPath: string;
+  
+  if (platform === 'win32') {
+    sessionsPath = path.join(os.tmpdir(), 'L7SWorkflowCapture', 'Sessions');
+  } else {
+    sessionsPath = path.join(os.homedir(), 'L7SWorkflowCapture', 'Sessions');
+  }
+  
+  // Create if needed
+  if (!fs.existsSync(sessionsPath)) {
+    fs.mkdirSync(sessionsPath, { recursive: true });
+    log(`Created sessions directory: ${sessionsPath}`);
+  }
+  
+  return sessionsPath;
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 400,
-    height: 300,
+    height: 280,
     resizable: false,
     maximizable: false,
     webPreferences: {
@@ -58,7 +76,7 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
     },
-    title: 'L7S Workflow Capture',
+    title: 'Workflow Capture',
   });
 
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
@@ -71,7 +89,7 @@ function createWindow(): void {
   log('Window created');
 }
 
-async function initializeObs(): Promise<void> {
+async function initialize(): Promise<void> {
   sendStatus({ state: 'starting', message: 'Initializing...' });
 
   // Initialize file manager
@@ -83,116 +101,12 @@ async function initializeObs(): Promise<void> {
   sessionManager = new SessionManager(fileManager);
   log('Session manager initialized');
 
-  // Kill any orphaned OBS processes
-  sendStatus({ state: 'starting', message: 'Cleaning up...' });
-  await ObsSupervisor.killOrphanedProcesses();
+  // Initialize native recorder
+  nativeRecorder = new NativeRecorder();
+  log('Native recorder initialized');
 
-  // Initialize OBS supervisor
-  obsSupervisor = new ObsSupervisor();
-  // Note: Do NOT use safe mode as it disables WebSockets
-  // The global.ini SafeMode=false setting should prevent the safe mode prompt
-  
-  // Run diagnostics before attempting to start OBS
-  sendStatus({ state: 'starting', message: 'Checking OBS installation...' });
-  const diagnostics = await obsSupervisor.runDiagnostics();
-  
-  if (!diagnostics.obsInstalled) {
-    const errorMsg = `OBS not found at: ${diagnostics.obsPath}. Please reinstall the application or install OBS manually.`;
-    log(`DIAGNOSTIC FAILURE: ${errorMsg}`);
-    sendStatus({ state: 'error', message: 'OBS not installed', error: errorMsg });
-    throw new Error(errorMsg);
-  }
-  
-  if (!diagnostics.profileExists) {
-    log(`DIAGNOSTIC WARNING: L7S profile not found at ${diagnostics.profilePath}`);
-  }
-  
-  if (!diagnostics.webSocketEnabled) {
-    log(`DIAGNOSTIC WARNING: WebSocket not enabled in global.ini`);
-  }
-  
-  if (diagnostics.issues.length > 0) {
-    log(`DIAGNOSTIC ISSUES (${diagnostics.issues.length}):`);
-    for (const issue of diagnostics.issues) {
-      log(`  - ${issue}`);
-    }
-  }
-  
-  obsSupervisor.on('obs-started', () => {
-    log('OBS process started');
-  });
-
-  obsSupervisor.on('obs-stopped', () => {
-    log('OBS process stopped');
-  });
-
-  obsSupervisor.on('obs-crashed', async () => {
-    log('OBS crashed, attempting recovery...');
-    sendStatus({ state: 'reconnecting', message: 'OBS crashed, restarting...' });
-    
-    if (obsController) {
-      obsController.disconnect();
-    }
-
-    try {
-      await obsSupervisor?.start();
-      await connectToObs();
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      sendStatus({ state: 'error', message: 'Failed to recover', error: errorMessage });
-    }
-  });
-
-  // Start OBS
-  sendStatus({ state: 'starting', message: 'Starting OBS...' });
-  try {
-    await obsSupervisor.start();
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    log(`Failed to start OBS: ${errorMessage}`);
-    log('Running diagnostics to identify the issue...');
-    const postDiag = await obsSupervisor.runDiagnostics();
-    sendStatus({ 
-      state: 'error', 
-      message: 'Failed to start OBS', 
-      error: `${errorMessage}. Issues: ${postDiag.issues.join('; ')}` 
-    });
-    throw error;
-  }
-
-  // Connect via WebSocket
-  await connectToObs();
-}
-
-async function connectToObs(): Promise<void> {
-  sendStatus({ state: 'starting', message: 'Connecting to OBS...' });
-
-  obsController = new ObsController();
-
-  obsController.on('disconnected', () => {
-    log('WebSocket disconnected from OBS');
-    if (obsSupervisor?.isRunning()) {
-      sendStatus({ state: 'reconnecting', message: 'Connection lost, reconnecting...' });
-      // Attempt reconnection
-      setTimeout(async () => {
-        try {
-          await obsController?.connect();
-          sendStatus({ state: 'idle', message: 'Ready' });
-        } catch {
-          sendStatus({ state: 'error', message: 'Failed to reconnect', error: 'WebSocket connection failed' });
-        }
-      }, 2000);
-    }
-  });
-
-  const connected = await obsController.connect();
-  
-  if (connected) {
-    sendStatus({ state: 'idle', message: 'Ready' });
-    log('OBS ready');
-  } else {
-    throw new Error('Failed to connect to OBS WebSocket');
-  }
+  sendStatus({ state: 'idle', message: 'Ready' });
+  log('System ready');
 }
 
 function startRecordingTimer(): void {
@@ -216,13 +130,17 @@ function stopRecordingTimer(): void {
 function setupIpcHandlers(): void {
   ipcMain.handle('start-recording', async (_event, note: string) => {
     try {
-      if (!sessionManager || !obsController) {
+      if (!sessionManager || !nativeRecorder || !mainWindow) {
         throw new Error('System not initialized');
       }
 
       const session = await sessionManager.createSession(note);
-      await obsController.setRecordDirectory(session.path);
-      await obsController.startRecording();
+      
+      // Set recording directory
+      nativeRecorder.setOutputDirectory(session.path);
+      
+      // Start recording
+      await nativeRecorder.startRecording(mainWindow);
       
       startRecordingTimer();
       sendStatus({ state: 'recording', message: 'Recording', recordingDuration: 0 });
@@ -238,18 +156,18 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle('stop-recording', async () => {
     try {
-      if (!sessionManager || !obsController) {
+      if (!sessionManager || !nativeRecorder || !mainWindow) {
         throw new Error('System not initialized');
       }
 
-      await obsController.stopRecording();
-      stopRecordingTimer();
+      const outputPath = await nativeRecorder.stopRecording(mainWindow);
       
+      stopRecordingTimer();
       await sessionManager.endCurrentSession();
       sendStatus({ state: 'idle', message: 'Ready' });
       
-      log('Recording stopped');
-      return { success: true };
+      log(`Recording stopped, saved to: ${outputPath}`);
+      return { success: true, path: outputPath };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       log(`Failed to stop recording: ${errorMessage}`);
@@ -259,11 +177,11 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle('get-status', async () => {
     try {
-      if (!obsController) {
+      if (!nativeRecorder) {
         return { state: 'error', message: 'Not initialized' };
       }
 
-      const recording = await obsController.getRecordingStatus();
+      const recording = nativeRecorder.getRecordingStatus();
       if (recording) {
         return { state: 'recording', message: 'Recording' };
       }
@@ -302,9 +220,10 @@ function setupIpcHandlers(): void {
     }
   });
 
-  ipcMain.handle('retry-connection', async () => {
+  // Handle recording data from renderer
+  ipcMain.handle('save-recording-chunk', async (_event, chunk: ArrayBuffer, outputPath: string) => {
     try {
-      await connectToObs();
+      fs.appendFileSync(outputPath, Buffer.from(chunk));
       return { success: true };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -312,17 +231,18 @@ function setupIpcHandlers(): void {
     }
   });
 
-  ipcMain.handle('run-diagnostics', async () => {
+  ipcMain.handle('get-screen-sources', async () => {
     try {
-      if (!obsSupervisor) {
-        return { success: false, error: 'OBS Supervisor not initialized' };
+      if (!nativeRecorder) {
+        throw new Error('Recorder not initialized');
       }
-      const report = await obsSupervisor.runDiagnostics();
-      log(`Diagnostics complete: ${report.issues.length} issues, ${report.warnings.length} warnings`);
-      return { success: true, report };
+      const sources = await nativeRecorder.getScreenSources();
+      return { 
+        success: true, 
+        sources: sources.map(s => ({ id: s.id, name: s.name })) 
+      };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      log(`Diagnostics failed: ${errorMessage}`);
       return { success: false, error: errorMessage };
     }
   });
@@ -351,7 +271,7 @@ if (!gotTheLock) {
     createWindow();
 
     try {
-      await initializeObs();
+      await initialize();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       log(`Initialization failed: ${errorMessage}`);
@@ -363,10 +283,9 @@ if (!gotTheLock) {
   
   app.on('before-quit', async (event) => {
     if (isQuitting) {
-      return; // Already handling quit
+      return;
     }
     
-    // Prevent the app from quitting until we're done cleaning up
     event.preventDefault();
     isQuitting = true;
     
@@ -374,27 +293,17 @@ if (!gotTheLock) {
     
     stopRecordingTimer();
 
-    if (obsController) {
+    if (nativeRecorder && mainWindow) {
       try {
-        const isRecording = await obsController.getRecordingStatus();
+        const isRecording = nativeRecorder.getRecordingStatus();
         if (isRecording) {
           log('Stopping active recording...');
-          await obsController.stopRecording();
+          await nativeRecorder.stopRecording(mainWindow);
           await sessionManager?.endCurrentSession();
         }
       } catch (error) {
         log(`Error during recording cleanup: ${error}`);
       }
-      
-      log('Disconnecting from OBS WebSocket...');
-      obsController.disconnect();
-    }
-
-    if (obsSupervisor) {
-      log('Stopping OBS process...');
-      await obsSupervisor.stop();
-      // Give OBS time to fully shut down and save its config
-      await new Promise(resolve => setTimeout(resolve, 2000));
     }
     
     log('Cleanup complete, quitting app');

@@ -1,8 +1,13 @@
 interface SystemStatus {
-  state: 'starting' | 'idle' | 'recording' | 'reconnecting' | 'error';
+  state: 'starting' | 'idle' | 'recording' | 'error';
   message: string;
   recordingDuration?: number;
   error?: string;
+}
+
+interface CaptureConfig {
+  sourceId: string;
+  outputPath: string;
 }
 
 // DOM Elements
@@ -16,13 +21,16 @@ const recordBtn = document.getElementById('record-btn') as HTMLButtonElement;
 const recordBtnText = document.getElementById('record-btn-text') as HTMLSpanElement;
 const errorContainer = document.getElementById('error-container') as HTMLDivElement;
 const errorMessage = document.getElementById('error-message') as HTMLParagraphElement;
-const retryBtn = document.getElementById('retry-btn') as HTMLButtonElement;
 const openFolderBtn = document.getElementById('open-folder-btn') as HTMLButtonElement;
 const exportBtn = document.getElementById('export-btn') as HTMLButtonElement;
 
-// State
+// Recording state
 let isRecording = false;
 let currentState: SystemStatus['state'] = 'starting';
+let mediaRecorder: MediaRecorder | null = null;
+let recordedChunks: Blob[] = [];
+let currentOutputPath: string | null = null;
+let mediaStream: MediaStream | null = null;
 
 // Format duration as HH:MM:SS
 function formatDuration(seconds: number): string {
@@ -42,7 +50,6 @@ function updateUI(status: SystemStatus): void {
   statusIndicator.className = `status-indicator ${status.state}`;
   statusText.textContent = status.message;
 
-  // Handle different states
   switch (status.state) {
     case 'starting':
       recordBtn.disabled = true;
@@ -75,12 +82,6 @@ function updateUI(status: SystemStatus): void {
       }
       break;
 
-    case 'reconnecting':
-      recordBtn.disabled = true;
-      taskNote.disabled = true;
-      errorContainer.classList.add('hidden');
-      break;
-
     case 'error':
       recordBtn.disabled = true;
       taskNote.disabled = true;
@@ -88,6 +89,115 @@ function updateUI(status: SystemStatus): void {
       errorContainer.classList.remove('hidden');
       errorMessage.textContent = status.error || 'An error occurred';
       break;
+  }
+}
+
+/**
+ * Start capturing screen using desktopCapturer stream
+ */
+async function startCapture(config: CaptureConfig): Promise<void> {
+  console.log('[Renderer] Starting capture with source:', config.sourceId);
+  
+  try {
+    // Get media stream from the selected source
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        // @ts-ignore - Electron-specific constraint
+        mandatory: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: config.sourceId,
+          minWidth: 1920,
+          maxWidth: 3840,
+          minHeight: 1080,
+          maxHeight: 2160,
+          minFrameRate: 30,
+          maxFrameRate: 30,
+        },
+      },
+    });
+
+    currentOutputPath = config.outputPath;
+    recordedChunks = [];
+
+    // Create MediaRecorder with WebM format (will be converted to MP4 by main process)
+    const options: MediaRecorderOptions = {
+      mimeType: 'video/webm;codecs=vp9',
+      videoBitsPerSecond: 5000000, // 5 Mbps
+    };
+
+    // Fallback if VP9 not supported
+    if (!MediaRecorder.isTypeSupported(options.mimeType!)) {
+      options.mimeType = 'video/webm;codecs=vp8';
+    }
+    if (!MediaRecorder.isTypeSupported(options.mimeType!)) {
+      options.mimeType = 'video/webm';
+    }
+
+    console.log('[Renderer] Using codec:', options.mimeType);
+    
+    mediaRecorder = new MediaRecorder(mediaStream, options);
+
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        recordedChunks.push(event.data);
+      }
+    };
+
+    mediaRecorder.onstop = async () => {
+      console.log('[Renderer] MediaRecorder stopped, saving file...');
+      
+      try {
+        // Combine all chunks into a single blob
+        const blob = new Blob(recordedChunks, { type: 'video/webm' });
+        const arrayBuffer = await blob.arrayBuffer();
+        
+        // Save the file via IPC
+        await window.electronAPI.saveRecordingData(arrayBuffer, currentOutputPath!);
+        
+        console.log('[Renderer] Recording saved successfully');
+        
+        // Notify main process that capture is complete
+        await window.electronAPI.notifyCaptureStopped({ success: true });
+      } catch (error) {
+        console.error('[Renderer] Failed to save recording:', error);
+        await window.electronAPI.notifyCaptureStopped({ 
+          success: false, 
+          error: error instanceof Error ? error.message : 'Unknown error' 
+        });
+      }
+      
+      // Clean up
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
+      }
+      recordedChunks = [];
+      currentOutputPath = null;
+    };
+
+    mediaRecorder.onerror = (event) => {
+      console.error('[Renderer] MediaRecorder error:', event);
+    };
+
+    // Start recording with 1 second chunks
+    mediaRecorder.start(1000);
+    console.log('[Renderer] Recording started');
+    
+  } catch (error) {
+    console.error('[Renderer] Failed to start capture:', error);
+    throw error;
+  }
+}
+
+/**
+ * Stop the current capture
+ */
+function stopCapture(): void {
+  console.log('[Renderer] Stopping capture...');
+  
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
   }
 }
 
@@ -110,30 +220,6 @@ async function handleRecordClick(): Promise<void> {
     }
   } catch (error) {
     console.error('Recording action failed:', error);
-  }
-}
-
-async function handleRetryClick(): Promise<void> {
-  retryBtn.disabled = true;
-  updateUI({ state: 'reconnecting', message: 'Reconnecting...' });
-
-  try {
-    const result = await window.electronAPI.retryConnection();
-    if (!result.success) {
-      updateUI({ 
-        state: 'error', 
-        message: 'Connection failed', 
-        error: result.error 
-      });
-    }
-  } catch (error) {
-    updateUI({ 
-      state: 'error', 
-      message: 'Connection failed', 
-      error: 'Unable to connect to OBS' 
-    });
-  } finally {
-    retryBtn.disabled = false;
   }
 }
 
@@ -180,13 +266,23 @@ async function handleExport(): Promise<void> {
 function init(): void {
   // Set up event listeners
   recordBtn.addEventListener('click', handleRecordClick);
-  retryBtn.addEventListener('click', handleRetryClick);
   openFolderBtn.addEventListener('click', handleOpenFolder);
   exportBtn.addEventListener('click', handleExport);
 
   // Listen for status updates from main process
   window.electronAPI.onStatusUpdate((status: SystemStatus) => {
     updateUI(status);
+  });
+
+  // Listen for capture commands from main process
+  window.electronAPI.onStartCapture((config: CaptureConfig) => {
+    startCapture(config).catch(error => {
+      console.error('[Renderer] Capture failed:', error);
+    });
+  });
+
+  window.electronAPI.onStopCapture(() => {
+    stopCapture();
   });
 
   // Set initial state

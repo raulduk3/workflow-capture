@@ -1,4 +1,4 @@
-# L7S Workflow Capture
+# Workflow Capture
 
 Screen recording workflow capture using OBS Studio. Captures screen recordings with session metadata for workflow analysis.
 
@@ -52,7 +52,7 @@ After building, you can run the installer inside Wine via Docker to ensure it in
 
 ```bash
 # Example after building to release/...
-./docker/test-windows-installer.sh "release/L7S Workflow Capture-0.1.2-x64.exe"
+./docker/test-windows-installer.sh "release/Workflow Capture-0.1.2-x64.exe"
 ```
 
 This runs the NSIS installer silently, verifies the app files were written under `Program Files`, and tears down the container afterward. On macOS/Linux hosts this avoids needing a local Wine install.
@@ -91,11 +91,24 @@ src/
 ## Recording Storage
 
 Sessions are stored in:
-- **Windows**: `C:\BandaStudy\Sessions\<session-id>\`
+- **Windows**: `%TEMP%\L7SWorkflowCapture\Sessions\<session-id>\`
+- **macOS/Linux**: `~/L7SWorkflowCapture/Sessions/<session-id>/`
 
 Each session contains:
 - `video.mp4` - Screen recording
 - `session.json` - Metadata (timestamps, notes, machine name)
+
+**Note for Windows 11 Pro users:** The application uses the system temp directory to avoid permission issues. If you need recordings in a different location, they are automatically organized by session and can be exported as a ZIP file from the application.
+
+## Windows 11 Pro Compatibility
+
+This application is fully compatible with Windows 11 Pro. Key features:
+
+- **No admin privileges required** for normal operation (recordings use temp directory)
+- **Firewall configuration** is automatic when installer runs as administrator
+  - If not running as admin, WebSocket will work locally but firewall rule must be added manually if needed
+- **Multi-user support** - OBS configuration is created per-user on first run
+- **Automatic profile switching** - Uses WebSocket API to ensure correct OBS profile/scenes are active
 
 ## License
 
