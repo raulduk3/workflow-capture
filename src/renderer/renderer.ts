@@ -61,21 +61,23 @@ function updateUI(status: SystemStatus): void {
     case 'idle':
       isRecording = false;
       recordBtn.disabled = false;
-      recordBtn.classList.remove('recording');
+      recordBtn.classList.remove('recording', 'processing');
       recordBtnText.textContent = 'Start Recording';
       taskNote.disabled = false;
       taskNote.value = ''; // Reset task description for next session
       timerDisplay.classList.add('hidden');
+      timerDisplay.classList.remove('processing');
       errorContainer.classList.add('hidden');
       break;
 
     case 'recording':
       isRecording = true;
       recordBtn.disabled = false;
+      recordBtn.classList.remove('processing');
       recordBtn.classList.add('recording');
       recordBtnText.textContent = 'Stop Recording';
       taskNote.disabled = true;
-      timerDisplay.classList.remove('hidden');
+      timerDisplay.classList.remove('hidden', 'processing');
       errorContainer.classList.add('hidden');
       
       if (status.recordingDuration !== undefined) {
@@ -87,9 +89,12 @@ function updateUI(status: SystemStatus): void {
       isRecording = false;
       recordBtn.disabled = true;
       recordBtn.classList.remove('recording');
-      recordBtnText.textContent = 'Processing...';
+      recordBtn.classList.add('processing');
+      recordBtnText.textContent = 'Saving...';
       taskNote.disabled = true;
-      timerDisplay.classList.add('hidden');
+      // Keep timer visible during processing to show final duration
+      timerDisplay.classList.remove('hidden');
+      timerDisplay.classList.add('processing');
       errorContainer.classList.add('hidden');
       break;
 
@@ -214,30 +219,53 @@ function stopCapture(): void {
 
 // Event Handlers
 async function handleRecordClick(): Promise<void> {
+  // Prevent double-clicks and clicks during invalid states
+  if (recordBtn.disabled) return;
+  if (currentState !== 'recording' && currentState !== 'idle') return;
+  
   recordBtn.disabled = true;
 
   try {
-    if (isRecording) {
+    if (currentState === 'recording') {
+      // Immediately show processing state for instant feedback
+      recordBtn.classList.remove('recording');
+      recordBtn.classList.add('processing');
+      recordBtnText.textContent = 'Saving...';
+      
       const result = await window.electronAPI.stopRecording();
       if (!result.success) {
         console.error('Failed to stop recording:', result.error);
-        // Re-enable button on failure so user can retry
+        // Reset to recording state so user can retry
+        recordBtn.classList.remove('processing');
+        recordBtn.classList.add('recording');
+        recordBtnText.textContent = 'Stop Recording';
         recordBtn.disabled = false;
       }
       // On success, button will be re-enabled by status update from main process
-    } else {
+    } else if (currentState === 'idle') {
+      // Show brief feedback during start
+      recordBtnText.textContent = 'Starting...';
+      
       const note = taskNote.value.trim();
       const result = await window.electronAPI.startRecording(note);
       if (!result.success) {
         console.error('Failed to start recording:', result.error);
-        // Re-enable button on failure so user can retry
+        // Reset button text on failure
+        recordBtnText.textContent = 'Start Recording';
         recordBtn.disabled = false;
       }
       // On success, button will be re-enabled by status update from main process
     }
   } catch (error) {
     console.error('Recording action failed:', error);
-    // Re-enable button on exception so user can retry
+    // Reset button on exception so user can retry
+    recordBtn.classList.remove('processing');
+    if (currentState === 'recording') {
+      recordBtn.classList.add('recording');
+      recordBtnText.textContent = 'Stop Recording';
+    } else {
+      recordBtnText.textContent = 'Start Recording';
+    }
     recordBtn.disabled = false;
   }
 }

@@ -114,6 +114,15 @@ main {
   background-color: var(--surface-color);
   border-radius: 8px;
   border: 2px solid var(--recording-color);
+  transition: opacity 0.2s ease-out, border-color 0.2s ease-out;
+}
+
+.timer-display.processing {
+  border-color: var(--warning-color);
+}
+
+.timer-display.processing #timer {
+  color: var(--warning-color);
 }
 
 .timer-display #timer {
@@ -185,6 +194,7 @@ main {
 .btn-primary {
   background-color: var(--accent-color);
   color: white;
+  transition: background-color 0.15s ease-out, opacity 0.15s ease-out;
 }
 
 .btn-primary:hover:not(:disabled) {
@@ -197,6 +207,11 @@ main {
 
 .btn-primary.recording:hover:not(:disabled) {
   background-color: #ff2222;
+}
+
+.btn-primary.processing {
+  background-color: var(--warning-color);
+  cursor: wait;
 }
 
 .btn-secondary {

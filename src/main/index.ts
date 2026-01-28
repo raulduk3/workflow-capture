@@ -40,6 +40,9 @@ function log(message: string): void {
 }
 
 function sendStatus(status: SystemStatus): void {
+  // Track current state for tray menu
+  currentSystemState = status.state;
+  
   if (mainWindow && !mainWindow.isDestroyed()) {
     // Ensure webContents is ready before sending
     if (mainWindow.webContents.isLoading()) {
@@ -50,6 +53,9 @@ function sendStatus(status: SystemStatus): void {
       mainWindow.webContents.send('system-status', status);
     }
   }
+  
+  // Update tray to reflect new state
+  updateTrayMenu();
 }
 
 /**
@@ -116,16 +122,21 @@ function createWindow(): void {
   log('Window created');
 }
 
+// Track current system state for tray menu
+let currentSystemState: SystemState = 'starting';
+
 function updateTrayMenu(): void {
   if (!tray) return;
   
   const isRecording = nativeRecorder?.getRecordingStatus() ?? false;
+  const isProcessing = currentSystemState === 'processing';
   
   const contextMenu = Menu.buildFromTemplate([
     { 
-      label: isRecording ? 'Stop Recording' : 'Show Window', 
+      label: isProcessing ? 'Saving...' : (isRecording ? 'Stop Recording' : 'Show Window'),
+      enabled: !isProcessing, // Disable menu item while processing
       click: async () => {
-        if (isRecording && nativeRecorder && mainWindow) {
+        if (isRecording && !isProcessing && nativeRecorder && mainWindow) {
           try {
             stopRecordingTimer();
             
@@ -165,14 +176,19 @@ function updateTrayMenu(): void {
     { type: 'separator' },
     { 
       label: 'Quit', 
-      enabled: !isRecording, // Disable quit while recording
+      enabled: !isRecording && !isProcessing, // Disable quit while recording or processing
       click: () => {
         app.quit();
       }
     }
   ]);
   
-  tray.setToolTip(isRecording ? 'Workflow Capture - Recording (Click to stop)' : 'Workflow Capture');
+  const tooltip = isProcessing 
+    ? 'Workflow Capture - Saving...'
+    : isRecording 
+      ? 'Workflow Capture - Recording (Click to stop)' 
+      : 'Workflow Capture';
+  tray.setToolTip(tooltip);
   tray.setContextMenu(contextMenu);
 }
 
@@ -217,7 +233,10 @@ function createTray(): void {
   
   // Click on tray icon - if recording, stop recording; otherwise toggle window
   tray.on('click', async () => {
-    if (nativeRecorder && nativeRecorder.getRecordingStatus() && mainWindow) {
+    const isRecording = nativeRecorder?.getRecordingStatus() ?? false;
+    const isProcessing = currentSystemState === 'processing';
+    
+    if (isRecording && !isProcessing && nativeRecorder && mainWindow) {
       // Stop recording on tray click
       try {
         stopRecordingTimer();
