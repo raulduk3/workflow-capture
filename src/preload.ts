@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 export interface SystemStatus {
-  state: 'starting' | 'idle' | 'recording' | 'error';
+  state: 'starting' | 'idle' | 'recording' | 'processing' | 'error';
   message: string;
   recordingDuration?: number;
   error?: string;

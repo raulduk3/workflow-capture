@@ -137,28 +137,27 @@ function updateTrayMenu(): void {
       enabled: !isProcessing, // Disable menu item while processing
       click: async () => {
         if (isRecording && !isProcessing && nativeRecorder && mainWindow) {
+          // Stop recording - do all work while window is still hidden
           try {
             stopRecordingTimer();
-            
-            // Show window immediately with processing state
-            mainWindow.show();
-            mainWindow.focus();
-            sendStatus({ state: 'processing', message: 'Processing video...' });
+            currentSystemState = 'processing';
             updateTrayMenu();
             
-            // Process recording in background
             const outputPath = await nativeRecorder.stopRecording(mainWindow);
-            
             await sessionManager?.endCurrentSession();
-            sendStatus({ state: 'idle', message: 'Ready' });
             
             log(`Recording stopped via tray menu, saved to: ${outputPath}`);
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
             log(`Failed to stop recording via tray menu: ${errorMessage}`);
-            sendStatus({ state: 'idle', message: 'Ready' });
-            updateTrayMenu();
           }
+          
+          // Now show window in idle state
+          currentSystemState = 'idle';
+          updateTrayMenu();
+          mainWindow.show();
+          mainWindow.focus();
+          sendStatus({ state: 'idle', message: 'Ready' });
         } else if (mainWindow) {
           mainWindow.show();
           mainWindow.focus();
@@ -237,29 +236,27 @@ function createTray(): void {
     const isProcessing = currentSystemState === 'processing';
     
     if (isRecording && !isProcessing && nativeRecorder && mainWindow) {
-      // Stop recording on tray click
+      // Stop recording - do all work while window is still hidden
       try {
         stopRecordingTimer();
-        
-        // Show window immediately with processing state
-        mainWindow.show();
-        mainWindow.focus();
-        sendStatus({ state: 'processing', message: 'Processing video...' });
+        currentSystemState = 'processing';
         updateTrayMenu();
         
-        // Process recording in background
         const outputPath = await nativeRecorder.stopRecording(mainWindow);
-        
         await sessionManager?.endCurrentSession();
-        sendStatus({ state: 'idle', message: 'Ready' });
         
         log(`Recording stopped via tray, saved to: ${outputPath}`);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         log(`Failed to stop recording via tray: ${errorMessage}`);
-        sendStatus({ state: 'idle', message: 'Ready' });
-        updateTrayMenu();
       }
+      
+      // Now show window in idle state
+      currentSystemState = 'idle';
+      updateTrayMenu();
+      mainWindow.show();
+      mainWindow.focus();
+      sendStatus({ state: 'idle', message: 'Ready' });
     } else if (mainWindow) {
       if (mainWindow.isVisible()) {
         mainWindow.hide();
