@@ -150,15 +150,11 @@ jobs:
             
             | File | Description |
             |------|-------------|
-            | `Workflow Capture-${{ needs.check-version.outputs.version }}-x64.exe` | Windows Installer (recommended) |
-            | `Workflow Capture-${{ needs.check-version.outputs.version }}-portable.exe` | Portable version (no install required) |
-            
+            | `Workflow Capture-${{ needs.check-version.outputs.version }}-x64.exe` | Windows Installer |
             ## Installation
             
             1. Download `Workflow Capture-${{ needs.check-version.outputs.version }}-x64.exe`
-            2. Run the installer (requires admin privileges)
-            3. The installer will automatically download and configure OBS Studio
-            4. Launch from Start Menu or Desktop shortcut
+            2. Run the installer
             
             ## Verify Download Integrity
             

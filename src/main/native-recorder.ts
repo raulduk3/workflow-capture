@@ -1,8 +1,32 @@
-import { desktopCapturer, screen, BrowserWindow, ipcMain } from 'electron';
+import { desktopCapturer, screen, BrowserWindow, ipcMain, app } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
-import ffmpegPath from 'ffmpeg-static';
+import ffmpegPathModule from 'ffmpeg-static';
 import { spawn } from 'child_process';
+
+/**
+ * Get the correct ffmpeg path for both development and packaged app
+ */
+function getFFmpegPath(): string | null {
+  // In packaged app, ffmpeg-static path needs adjustment
+  if (app.isPackaged && ffmpegPathModule) {
+    // The path from ffmpeg-static points to node_modules inside asar
+    // We need to point to the unpacked version
+    const unpackedPath = ffmpegPathModule.replace('app.asar', 'app.asar.unpacked');
+    if (fs.existsSync(unpackedPath)) {
+      return unpackedPath;
+    }
+    // Try the original path as fallback
+    if (fs.existsSync(ffmpegPathModule)) {
+      return ffmpegPathModule;
+    }
+    console.log('[NativeRecorder] FFmpeg not found at:', unpackedPath, 'or', ffmpegPathModule);
+    return null;
+  }
+  return ffmpegPathModule;
+}
+
+const ffmpegPath = getFFmpegPath();
 
 export interface RecorderStatus {
   isRecording: boolean;
