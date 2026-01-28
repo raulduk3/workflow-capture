@@ -210,16 +210,24 @@ async function handleRecordClick(): Promise<void> {
       const result = await window.electronAPI.stopRecording();
       if (!result.success) {
         console.error('Failed to stop recording:', result.error);
+        // Re-enable button on failure so user can retry
+        recordBtn.disabled = false;
       }
+      // On success, button will be re-enabled by status update from main process
     } else {
       const note = taskNote.value.trim();
       const result = await window.electronAPI.startRecording(note);
       if (!result.success) {
         console.error('Failed to start recording:', result.error);
+        // Re-enable button on failure so user can retry
+        recordBtn.disabled = false;
       }
+      // On success, button will be re-enabled by status update from main process
     }
   } catch (error) {
     console.error('Recording action failed:', error);
+    // Re-enable button on exception so user can retry
+    recordBtn.disabled = false;
   }
 }
 

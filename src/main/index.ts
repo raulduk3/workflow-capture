@@ -69,7 +69,7 @@ function getSessionsPath(): string {
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 400,
-    height: 280,
+    height: 320,
     resizable: false,
     maximizable: false,
     webPreferences: {
@@ -161,9 +161,12 @@ function setupIpcHandlers(): void {
         throw new Error('System not initialized');
       }
 
+      // Stop the timer immediately so user sees feedback
+      stopRecordingTimer();
+      sendStatus({ state: 'starting', message: 'Processing...' });
+
       const outputPath = await nativeRecorder.stopRecording(mainWindow);
       
-      stopRecordingTimer();
       await sessionManager.endCurrentSession();
       sendStatus({ state: 'idle', message: 'Ready' });
       
@@ -172,6 +175,8 @@ function setupIpcHandlers(): void {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       log(`Failed to stop recording: ${errorMessage}`);
+      // Reset to idle state on error so user can try again
+      sendStatus({ state: 'idle', message: 'Ready' });
       return { success: false, error: errorMessage };
     }
   });
