@@ -33,6 +33,7 @@ let sessionManager: SessionManager | null = null;
 let fileManager: FileManager | null = null;
 let recordingStartTime: number | null = null;
 let recordingTimer: NodeJS.Timeout | null = null;
+let isQuitting = false;
 
 function log(message: string): void {
   console.log(`[Main] ${message}`);
@@ -98,6 +99,14 @@ function createWindow(): void {
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
     mainWindow?.focus();
+  });
+
+  // Hide to tray instead of closing
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow?.hide();
+    }
   });
 
   mainWindow.on('closed', () => {
@@ -391,8 +400,6 @@ if (!gotTheLock) {
       sendStatus({ state: 'error', message: 'Failed to initialize', error: errorMessage });
     }
   });
-
-  let isQuitting = false;
   
   app.on('before-quit', async (event) => {
     if (isQuitting) {
