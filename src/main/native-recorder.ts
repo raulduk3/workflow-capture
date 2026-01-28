@@ -155,16 +155,24 @@ export class NativeRecorder {
 
         try {
           // Convert WebM to MP4
-          await this.convertToMp4();
+          const conversionSuccess = await this.convertToMp4();
           
-          // Clean up temp WebM file
-          if (this.tempWebmPath && fs.existsSync(this.tempWebmPath)) {
-            fs.unlinkSync(this.tempWebmPath);
-            this.log('Cleaned up temp WebM file');
+          let outputPath: string;
+          
+          if (conversionSuccess && this.finalMp4Path && fs.existsSync(this.finalMp4Path)) {
+            // Clean up temp WebM file only if MP4 was created successfully
+            if (this.tempWebmPath && fs.existsSync(this.tempWebmPath)) {
+              fs.unlinkSync(this.tempWebmPath);
+              this.log('Cleaned up temp WebM file');
+            }
+            outputPath = this.finalMp4Path;
+          } else {
+            // Fallback: keep the WebM file if conversion failed
+            this.log('MP4 conversion failed, keeping WebM file');
+            outputPath = this.tempWebmPath!;
           }
 
           this.isRecording = false;
-          const outputPath = this.finalMp4Path!;
           this.tempWebmPath = null;
           this.finalMp4Path = null;
           
@@ -181,47 +189,63 @@ export class NativeRecorder {
 
   /**
    * Convert WebM to MP4 using ffmpeg
+   * Returns true if successful, false if conversion failed
    */
-  private async convertToMp4(): Promise<void> {
+  private async convertToMp4(): Promise<boolean> {
     if (!this.tempWebmPath || !this.finalMp4Path) {
-      throw new Error('Output paths not set');
+      this.log('Output paths not set for conversion');
+      return false;
     }
 
     if (!fs.existsSync(this.tempWebmPath)) {
-      throw new Error(`WebM file not found: ${this.tempWebmPath}`);
+      this.log(`WebM file not found: ${this.tempWebmPath}`);
+      return false;
+    }
+
+    if (!ffmpegPath) {
+      this.log('FFmpeg binary not found - ffmpeg-static may not be installed correctly');
+      return false;
     }
 
     this.log(`Converting to MP4: ${this.tempWebmPath} -> ${this.finalMp4Path}`);
+    this.log(`Using FFmpeg at: ${ffmpegPath}`);
 
-    return new Promise((resolve, reject) => {
-      const ffmpeg = spawn(ffmpegPath!, [
-        '-i', this.tempWebmPath!,
-        '-c:v', 'libx264',
-        '-preset', 'fast',
-        '-crf', '23',
-        '-y', // Overwrite output file
-        this.finalMp4Path!,
-      ]);
+    return new Promise((resolve) => {
+      try {
+        const ffmpeg = spawn(ffmpegPath!, [
+          '-i', this.tempWebmPath!,
+          '-c:v', 'libx264',
+          '-preset', 'fast',
+          '-crf', '23',
+          '-y', // Overwrite output file
+          this.finalMp4Path!,
+        ]);
 
-      let stderr = '';
+        let stderr = '';
 
-      ffmpeg.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
+        ffmpeg.stderr.on('data', (data) => {
+          stderr += data.toString();
+        });
 
-      ffmpeg.on('close', (code) => {
-        if (code === 0) {
-          this.log('MP4 conversion complete');
-          resolve();
-        } else {
-          this.log(`FFmpeg error: ${stderr}`);
-          reject(new Error(`FFmpeg exited with code ${code}`));
-        }
-      });
+        ffmpeg.on('close', (code) => {
+          if (code === 0) {
+            this.log('MP4 conversion complete');
+            resolve(true);
+          } else {
+            this.log(`FFmpeg exited with code ${code}`);
+            this.log(`FFmpeg stderr: ${stderr.slice(-500)}`);
+            resolve(false);
+          }
+        });
 
-      ffmpeg.on('error', (err) => {
-        reject(new Error(`Failed to run FFmpeg: ${err.message}`));
-      });
+        ffmpeg.on('error', (err) => {
+          this.log(`Failed to run FFmpeg: ${err.message}`);
+          resolve(false);
+        });
+      } catch (err) {
+        this.log(`Exception spawning FFmpeg: ${err}`);
+        resolve(false);
+      }
     });
   }
 

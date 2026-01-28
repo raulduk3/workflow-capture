@@ -64,6 +64,7 @@ function updateUI(status: SystemStatus): void {
       recordBtn.classList.remove('recording');
       recordBtnText.textContent = 'Start Recording';
       taskNote.disabled = false;
+      taskNote.value = ''; // Reset task description for next session
       timerDisplay.classList.add('hidden');
       errorContainer.classList.add('hidden');
       break;
