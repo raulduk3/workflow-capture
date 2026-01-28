@@ -1,6 +1,6 @@
 {
   "name": "l7s-workflow-capture",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Standalone screen recording workflow capture",
   "main": "dist/main/index.js",
   "scripts": {

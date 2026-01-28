@@ -116,6 +116,66 @@ function createWindow(): void {
   log('Window created');
 }
 
+function updateTrayMenu(): void {
+  if (!tray) return;
+  
+  const isRecording = nativeRecorder?.getRecordingStatus() ?? false;
+  
+  const contextMenu = Menu.buildFromTemplate([
+    { 
+      label: isRecording ? 'Stop Recording' : 'Show Window', 
+      click: async () => {
+        if (isRecording && nativeRecorder && mainWindow) {
+          try {
+            stopRecordingTimer();
+            sendStatus({ state: 'starting', message: 'Processing...' });
+            
+            const outputPath = await nativeRecorder.stopRecording(mainWindow);
+            
+            mainWindow.show();
+            mainWindow.focus();
+            
+            await sessionManager?.endCurrentSession();
+            sendStatus({ state: 'idle', message: 'Ready' });
+            updateTrayMenu();
+            
+            log(`Recording stopped via tray menu, saved to: ${outputPath}`);
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            log(`Failed to stop recording via tray menu: ${errorMessage}`);
+            mainWindow.show();
+            mainWindow.focus();
+            sendStatus({ state: 'idle', message: 'Ready' });
+            updateTrayMenu();
+          }
+        } else if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      }
+    },
+    { 
+      label: 'Open Sessions Folder', 
+      click: async () => {
+        if (fileManager) {
+          await fileManager.openSessionsFolder();
+        }
+      }
+    },
+    { type: 'separator' },
+    { 
+      label: 'Quit', 
+      enabled: !isRecording, // Disable quit while recording
+      click: () => {
+        app.quit();
+      }
+    }
+  ]);
+  
+  tray.setToolTip(isRecording ? 'Workflow Capture - Recording (Click to stop)' : 'Workflow Capture');
+  tray.setContextMenu(contextMenu);
+}
+
 function createTray(): void {
   // Use the app icon for the tray
   let iconPath: string;
@@ -151,39 +211,37 @@ function createTray(): void {
   
   tray = new Tray(trayIcon);
   
-  const contextMenu = Menu.buildFromTemplate([
-    { 
-      label: 'Show Window', 
-      click: () => {
-        if (mainWindow) {
-          mainWindow.show();
-          mainWindow.focus();
-        }
-      }
-    },
-    { 
-      label: 'Open Sessions Folder', 
-      click: async () => {
-        if (fileManager) {
-          await fileManager.openSessionsFolder();
-        }
-      }
-    },
-    { type: 'separator' },
-    { 
-      label: 'Quit', 
-      click: () => {
-        app.quit();
-      }
-    }
-  ]);
+  updateTrayMenu();
   
   tray.setToolTip('Workflow Capture');
-  tray.setContextMenu(contextMenu);
   
-  // Click on tray icon to show/hide window
-  tray.on('click', () => {
-    if (mainWindow) {
+  // Click on tray icon - if recording, stop recording; otherwise toggle window
+  tray.on('click', async () => {
+    if (nativeRecorder && nativeRecorder.getRecordingStatus() && mainWindow) {
+      // Stop recording on tray click
+      try {
+        stopRecordingTimer();
+        sendStatus({ state: 'starting', message: 'Processing...' });
+        
+        const outputPath = await nativeRecorder.stopRecording(mainWindow);
+        
+        mainWindow.show();
+        mainWindow.focus();
+        
+        await sessionManager?.endCurrentSession();
+        sendStatus({ state: 'idle', message: 'Ready' });
+        updateTrayMenu();
+        
+        log(`Recording stopped via tray, saved to: ${outputPath}`);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        log(`Failed to stop recording via tray: ${errorMessage}`);
+        mainWindow?.show();
+        mainWindow?.focus();
+        sendStatus({ state: 'idle', message: 'Ready' });
+        updateTrayMenu();
+      }
+    } else if (mainWindow) {
       if (mainWindow.isVisible()) {
         mainWindow.hide();
       } else {
@@ -258,6 +316,12 @@ function setupIpcHandlers(): void {
       // Start recording
       await nativeRecorder.startRecording(mainWindow);
       
+      // Hide window during recording
+      mainWindow.hide();
+      
+      // Update tray to show recording state
+      updateTrayMenu();
+      
       startRecordingTimer();
       sendStatus({ state: 'recording', message: 'Recording', recordingDuration: 0 });
       
@@ -282,16 +346,30 @@ function setupIpcHandlers(): void {
 
       const outputPath = await nativeRecorder.stopRecording(mainWindow);
       
+      // Show window after recording stops
+      mainWindow.show();
+      mainWindow.focus();
+      
       await sessionManager.endCurrentSession();
       sendStatus({ state: 'idle', message: 'Ready' });
+      
+      // Update tray to show idle state
+      updateTrayMenu();
       
       log(`Recording stopped, saved to: ${outputPath}`);
       return { success: true, path: outputPath };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       log(`Failed to stop recording: ${errorMessage}`);
+      // Show window on error
+      if (mainWindow) {
+        mainWindow.show();
+        mainWindow.focus();
+      }
       // Reset to idle state on error so user can try again
       sendStatus({ state: 'idle', message: 'Ready' });
+      // Update tray to show idle state
+      updateTrayMenu();
       return { success: false, error: errorMessage };
     }
   });
