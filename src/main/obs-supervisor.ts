@@ -449,4 +449,158 @@ export class ObsSupervisor extends EventEmitter {
   public setBypassSafeModePrompt(bypass: boolean): void {
     this.bypassSafeModePrompt = bypass;
   }
+
+  /**
+   * Run comprehensive diagnostics to check OBS installation and configuration
+   * Returns a diagnostic report with all issues found
+   */
+  public async runDiagnostics(): Promise<ObsDiagnosticReport> {
+    const report: ObsDiagnosticReport = {
+      timestamp: new Date().toISOString(),
+      platform: os.platform(),
+      obsInstalled: false,
+      obsPath: this.obsPath,
+      obsPathExists: false,
+      profileExists: false,
+      profilePath: '',
+      sceneCollectionExists: false,
+      sceneCollectionPath: '',
+      globalConfigExists: false,
+      globalConfigPath: '',
+      webSocketEnabled: false,
+      webSocketPort: 4455,
+      sessionsDirectoryExists: false,
+      sessionsPath: '',
+      issues: [],
+      warnings: []
+    };
+
+    const platform = os.platform();
+
+    // Check OBS executable
+    report.obsPathExists = fs.existsSync(this.obsPath);
+    report.obsInstalled = report.obsPathExists;
+    if (!report.obsPathExists) {
+      report.issues.push(`OBS not found at: ${this.obsPath}`);
+    } else {
+      this.log(`[Diagnostics] OBS found at: ${this.obsPath}`);
+    }
+
+    // Determine config paths based on platform
+    let configBasePath: string;
+    if (platform === 'darwin') {
+      configBasePath = path.join(os.homedir(), 'Library', 'Application Support', 'obs-studio');
+    } else if (platform === 'win32') {
+      configBasePath = path.join(process.env.APPDATA || '', 'obs-studio');
+    } else {
+      configBasePath = path.join(os.homedir(), '.config', 'obs-studio');
+    }
+
+    // Check global.ini (WebSocket settings)
+    report.globalConfigPath = path.join(configBasePath, 'global.ini');
+    report.globalConfigExists = fs.existsSync(report.globalConfigPath);
+    if (!report.globalConfigExists) {
+      report.issues.push(`OBS global config not found at: ${report.globalConfigPath}`);
+    } else {
+      this.log(`[Diagnostics] global.ini found at: ${report.globalConfigPath}`);
+      // Parse global.ini to check WebSocket settings
+      try {
+        const globalConfig = fs.readFileSync(report.globalConfigPath, 'utf-8');
+        const wsEnabledMatch = globalConfig.match(/ServerEnabled\s*=\s*(true|false)/i);
+        const wsPortMatch = globalConfig.match(/ServerPort\s*=\s*(\d+)/);
+        
+        report.webSocketEnabled = wsEnabledMatch ? wsEnabledMatch[1].toLowerCase() === 'true' : false;
+        report.webSocketPort = wsPortMatch ? parseInt(wsPortMatch[1], 10) : 4455;
+        
+        if (!report.webSocketEnabled) {
+          report.issues.push('WebSocket server is NOT enabled in global.ini');
+        } else {
+          this.log(`[Diagnostics] WebSocket enabled on port ${report.webSocketPort}`);
+        }
+
+        // Check for SafeMode
+        const safeModeMatch = globalConfig.match(/SafeMode\s*=\s*(true|false)/i);
+        if (safeModeMatch && safeModeMatch[1].toLowerCase() === 'true') {
+          report.warnings.push('SafeMode is enabled - this may cause issues');
+        }
+      } catch (err) {
+        report.warnings.push(`Failed to parse global.ini: ${err}`);
+      }
+    }
+
+    // Check profile
+    report.profilePath = path.join(configBasePath, 'basic', 'profiles', this.profileName);
+    report.profileExists = fs.existsSync(report.profilePath);
+    if (!report.profileExists) {
+      report.issues.push(`L7S profile not found at: ${report.profilePath}`);
+    } else {
+      this.log(`[Diagnostics] Profile found at: ${report.profilePath}`);
+      // Check basic.ini exists within profile
+      const basicIniPath = path.join(report.profilePath, 'basic.ini');
+      if (!fs.existsSync(basicIniPath)) {
+        report.issues.push(`Profile basic.ini not found at: ${basicIniPath}`);
+      }
+    }
+
+    // Check scene collection
+    report.sceneCollectionPath = path.join(configBasePath, 'basic', 'scenes', `${this.sceneCollectionName}.json`);
+    report.sceneCollectionExists = fs.existsSync(report.sceneCollectionPath);
+    if (!report.sceneCollectionExists) {
+      report.issues.push(`L7S scene collection not found at: ${report.sceneCollectionPath}`);
+    } else {
+      this.log(`[Diagnostics] Scene collection found at: ${report.sceneCollectionPath}`);
+    }
+
+    // Check sessions directory
+    if (platform === 'win32') {
+      report.sessionsPath = 'C:\\BandaStudy\\Sessions';
+    } else {
+      report.sessionsPath = path.join(os.homedir(), 'BandaStudy', 'Sessions');
+    }
+    report.sessionsDirectoryExists = fs.existsSync(report.sessionsPath);
+    if (!report.sessionsDirectoryExists) {
+      report.warnings.push(`Sessions directory not found at: ${report.sessionsPath}`);
+    } else {
+      this.log(`[Diagnostics] Sessions directory found at: ${report.sessionsPath}`);
+    }
+
+    // Log summary
+    this.log(`[Diagnostics] === Summary ===");
+    this.log(`[Diagnostics] OBS Installed: ${report.obsInstalled}`);
+    this.log(`[Diagnostics] Profile Exists: ${report.profileExists}`);
+    this.log(`[Diagnostics] Scene Collection Exists: ${report.sceneCollectionExists}`);
+    this.log(`[Diagnostics] WebSocket Enabled: ${report.webSocketEnabled}`);
+    this.log(`[Diagnostics] Issues: ${report.issues.length}`);
+    this.log(`[Diagnostics] Warnings: ${report.warnings.length}`);
+    
+    for (const issue of report.issues) {
+      this.log(`[Diagnostics] ISSUE: ${issue}`);
+    }
+    for (const warning of report.warnings) {
+      this.log(`[Diagnostics] WARNING: ${warning}`);
+    }
+
+    return report;
+  }
+}
+
+// Diagnostic report interface
+export interface ObsDiagnosticReport {
+  timestamp: string;
+  platform: string;
+  obsInstalled: boolean;
+  obsPath: string;
+  obsPathExists: boolean;
+  profileExists: boolean;
+  profilePath: string;
+  sceneCollectionExists: boolean;
+  sceneCollectionPath: string;
+  globalConfigExists: boolean;
+  globalConfigPath: string;
+  webSocketEnabled: boolean;
+  webSocketPort: number;
+  sessionsDirectoryExists: boolean;
+  sessionsPath: string;
+  issues: string[];
+  warnings: string[];
 }

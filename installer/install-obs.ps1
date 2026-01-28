@@ -32,6 +32,47 @@ $EXISTING_OBS_DETECTED = $false
 $MIN_INSTALLER_SIZE_BYTES = 50000000  # ~50MB minimum expected size
 $MIN_DISK_SPACE_MB = 500  # Minimum free space required
 
+# Diagnostic log file - critical for VM debugging
+$DIAGNOSTIC_LOG_PATH = "C:\BandaStudy\obs-setup-diagnostic.log"
+
+function Initialize-DiagnosticLog {
+    try {
+        # Ensure directory exists
+        $logDir = Split-Path $DIAGNOSTIC_LOG_PATH -Parent
+        if (-not (Test-Path $logDir)) {
+            New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+        }
+        
+        # Start fresh log
+        $header = @"
+========================================
+L7S OBS Setup Diagnostic Log
+Started: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+Computer: $env:COMPUTERNAME
+User: $env:USERNAME
+PowerShell: $($PSVersionTable.PSVersion)
+OS: $(Get-CimInstance Win32_OperatingSystem | Select-Object -ExpandProperty Caption)
+========================================
+
+"@
+        Set-Content -Path $DIAGNOSTIC_LOG_PATH -Value $header -Encoding UTF8
+    } catch {
+        # Can't even create log file - write to console
+        Write-Host "WARNING: Cannot create diagnostic log at $DIAGNOSTIC_LOG_PATH : $_" -ForegroundColor Yellow
+    }
+}
+
+function Write-DiagnosticLog {
+    param([string]$Message, [string]$Level = "INFO")
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logLine = "[$timestamp] [$Level] $Message"
+    try {
+        Add-Content -Path $DIAGNOSTIC_LOG_PATH -Value $logLine -Encoding UTF8 -ErrorAction SilentlyContinue
+    } catch {
+        # Silently fail - don't break installation for logging
+    }
+}
+
 function Test-Administrator {
     $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
@@ -49,6 +90,8 @@ function Write-Log {
         default { "White" }
     }
     Write-Host "[$timestamp] [$Level] $Message" -ForegroundColor $color
+    # Also write to diagnostic log
+    Write-DiagnosticLog -Message $Message -Level $Level
 }
 
 function Test-OBSInstalled {
@@ -784,13 +827,131 @@ function Show-ExistingOBSWarning {
     Write-Host ""
 }
 
+function Write-DiagnosticSummary {
+    Write-DiagnosticLog "" "INFO"
+    Write-DiagnosticLog "=== DIAGNOSTIC SUMMARY ===" "INFO"
+    Write-DiagnosticLog "" "INFO"
+    
+    # Check OBS executable
+    $obsExe = "$InstallPath\bin\64bit\obs64.exe"
+    if (Test-Path $obsExe) {
+        Write-DiagnosticLog "[OK] OBS executable found: $obsExe" "SUCCESS"
+        try {
+            $version = (Get-Item $obsExe).VersionInfo.ProductVersion
+            Write-DiagnosticLog "     OBS Version: $version" "INFO"
+        } catch {
+            Write-DiagnosticLog "     OBS Version: Unknown" "WARNING"
+        }
+    } else {
+        Write-DiagnosticLog "[FAIL] OBS executable NOT found: $obsExe" "ERROR"
+    }
+    
+    # Check global.ini (WebSocket settings)
+    $globalIni = "$OBS_APPDATA\global.ini"
+    if (Test-Path $globalIni) {
+        Write-DiagnosticLog "[OK] global.ini found: $globalIni" "SUCCESS"
+        try {
+            $content = Get-Content $globalIni -Raw
+            if ($content -match "ServerEnabled\s*=\s*true") {
+                Write-DiagnosticLog "     WebSocket ServerEnabled: true" "SUCCESS"
+            } else {
+                Write-DiagnosticLog "[WARN] WebSocket ServerEnabled: NOT FOUND or false" "WARNING"
+            }
+            if ($content -match "ServerPort\s*=\s*(\d+)") {
+                Write-DiagnosticLog "     WebSocket Port: $($matches[1])" "INFO"
+            }
+            if ($content -match "AuthRequired\s*=\s*false") {
+                Write-DiagnosticLog "     AuthRequired: false (good)" "SUCCESS"
+            } else {
+                Write-DiagnosticLog "[WARN] AuthRequired: NOT FOUND or true - may cause connection issues" "WARNING"
+            }
+            if ($content -match "SafeMode\s*=\s*false") {
+                Write-DiagnosticLog "     SafeMode: false (good)" "SUCCESS"
+            } else {
+                Write-DiagnosticLog "[WARN] SafeMode: NOT FOUND or true - OBS may prompt for safe mode" "WARNING"
+            }
+        } catch {
+            Write-DiagnosticLog "     Failed to read global.ini: $_" "WARNING"
+        }
+    } else {
+        Write-DiagnosticLog "[FAIL] global.ini NOT found: $globalIni" "ERROR"
+    }
+    
+    # Check profile
+    $profilePath = "$OBS_APPDATA\basic\profiles\$ProfileName"
+    if (Test-Path $profilePath) {
+        Write-DiagnosticLog "[OK] Profile folder found: $profilePath" "SUCCESS"
+        $basicIni = "$profilePath\basic.ini"
+        if (Test-Path $basicIni) {
+            Write-DiagnosticLog "     basic.ini exists" "SUCCESS"
+        } else {
+            Write-DiagnosticLog "[WARN] basic.ini NOT found in profile" "WARNING"
+        }
+    } else {
+        Write-DiagnosticLog "[FAIL] Profile folder NOT found: $profilePath" "ERROR"
+    }
+    
+    # Check scene collection
+    $sceneFile = "$OBS_APPDATA\basic\scenes\$ProfileName.json"
+    if (Test-Path $sceneFile) {
+        Write-DiagnosticLog "[OK] Scene collection found: $sceneFile" "SUCCESS"
+        try {
+            $size = (Get-Item $sceneFile).Length
+            Write-DiagnosticLog "     Scene file size: $size bytes" "INFO"
+        } catch {}
+    } else {
+        Write-DiagnosticLog "[FAIL] Scene collection NOT found: $sceneFile" "ERROR"
+    }
+    
+    # Check sessions directory
+    if (Test-Path $SessionsPath) {
+        Write-DiagnosticLog "[OK] Sessions directory found: $SessionsPath" "SUCCESS"
+    } else {
+        Write-DiagnosticLog "[FAIL] Sessions directory NOT found: $SessionsPath" "ERROR"
+    }
+    
+    # Check if any OBS processes are running
+    $obsProcs = Get-Process -Name "obs64" -ErrorAction SilentlyContinue
+    if ($obsProcs) {
+        Write-DiagnosticLog "[WARN] OBS is currently running (PID: $($obsProcs.Id -join ', '))" "WARNING"
+    } else {
+        Write-DiagnosticLog "[OK] No OBS processes running (ready for app to start)" "SUCCESS"
+    }
+    
+    # Check port 4455 availability
+    try {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 4455)
+        $listener.Start()
+        $listener.Stop()
+        Write-DiagnosticLog "[OK] Port 4455 is available" "SUCCESS"
+    } catch {
+        Write-DiagnosticLog "[WARN] Port 4455 may be in use: $_" "WARNING"
+    }
+    
+    Write-DiagnosticLog "" "INFO"
+    Write-DiagnosticLog "=== END DIAGNOSTIC SUMMARY ===" "INFO"
+    Write-DiagnosticLog "Warnings encountered during install: $script:WarningsEncountered" "INFO"
+}
+
 # Main installation flow
 function Main {
+    # Initialize diagnostic logging first
+    Initialize-DiagnosticLog
+    Write-DiagnosticLog "=== Installation Started ===" "INFO"
+    
     Write-Host ""
     Write-Host "============================================" -ForegroundColor Cyan
     Write-Host "  L7S Workflow Capture - OBS Setup" -ForegroundColor Cyan
     Write-Host "============================================" -ForegroundColor Cyan
     Write-Host ""
+    
+    # Log environment details
+    Write-DiagnosticLog "Install Path: $InstallPath" "INFO"
+    Write-DiagnosticLog "Profile Name: $ProfileName" "INFO"
+    Write-DiagnosticLog "Sessions Path: $SessionsPath" "INFO"
+    Write-DiagnosticLog "OBS AppData: $OBS_APPDATA" "INFO"
+    Write-DiagnosticLog "Force: $Force" "INFO"
+    Write-DiagnosticLog "SetAsDefault: $SetAsDefault" "INFO"
     
     # Check for administrator privileges if installing to Program Files
     if ($InstallPath -like "*Program Files*" -and -not (Test-Administrator)) {
@@ -872,6 +1033,9 @@ function Main {
     
     Create-BandaStudyDirectory
     
+    # Write diagnostic summary for debugging
+    Write-DiagnosticSummary
+    
     Write-Host ""
     Write-Host "============================================" -ForegroundColor Green
     Write-Host "  Installation Complete!" -ForegroundColor Green
@@ -880,6 +1044,7 @@ function Main {
     Write-Log "OBS Studio is configured for screen capture" "SUCCESS"
     Write-Log "WebSocket server: ws://127.0.0.1:4455 (no auth)" "INFO"
     Write-Log "Recording output: $SessionsPath" "INFO"
+    Write-Log "Diagnostic log: $DIAGNOSTIC_LOG_PATH" "INFO"
     
     if ($script:EXISTING_OBS_DETECTED -and -not $isNewInstall) {
         Write-Host ""
@@ -891,8 +1056,10 @@ function Main {
     
     # Return appropriate exit code
     if ($script:WarningsEncountered) {
+        Write-DiagnosticLog "=== Installation Completed with Warnings (exit code 2) ===" "WARNING"
         return 2  # Warnings but OK
     }
+    Write-DiagnosticLog "=== Installation Completed Successfully (exit code 0) ===" "SUCCESS"
     return 0  # Success
 }
 

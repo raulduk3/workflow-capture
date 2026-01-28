@@ -92,6 +92,32 @@ async function initializeObs(): Promise<void> {
   // Note: Do NOT use safe mode as it disables WebSockets
   // The global.ini SafeMode=false setting should prevent the safe mode prompt
   
+  // Run diagnostics before attempting to start OBS
+  sendStatus({ state: 'starting', message: 'Checking OBS installation...' });
+  const diagnostics = await obsSupervisor.runDiagnostics();
+  
+  if (!diagnostics.obsInstalled) {
+    const errorMsg = `OBS not found at: ${diagnostics.obsPath}. Please reinstall the application or install OBS manually.`;
+    log(`DIAGNOSTIC FAILURE: ${errorMsg}`);
+    sendStatus({ state: 'error', message: 'OBS not installed', error: errorMsg });
+    throw new Error(errorMsg);
+  }
+  
+  if (!diagnostics.profileExists) {
+    log(`DIAGNOSTIC WARNING: L7S profile not found at ${diagnostics.profilePath}`);
+  }
+  
+  if (!diagnostics.webSocketEnabled) {
+    log(`DIAGNOSTIC WARNING: WebSocket not enabled in global.ini`);
+  }
+  
+  if (diagnostics.issues.length > 0) {
+    log(`DIAGNOSTIC ISSUES (${diagnostics.issues.length}):`);
+    for (const issue of diagnostics.issues) {
+      log(`  - ${issue}`);
+    }
+  }
+  
   obsSupervisor.on('obs-started', () => {
     log('OBS process started');
   });
@@ -119,7 +145,20 @@ async function initializeObs(): Promise<void> {
 
   // Start OBS
   sendStatus({ state: 'starting', message: 'Starting OBS...' });
-  await obsSupervisor.start();
+  try {
+    await obsSupervisor.start();
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    log(`Failed to start OBS: ${errorMessage}`);
+    log('Running diagnostics to identify the issue...');
+    const postDiag = await obsSupervisor.runDiagnostics();
+    sendStatus({ 
+      state: 'error', 
+      message: 'Failed to start OBS', 
+      error: `${errorMessage}. Issues: ${postDiag.issues.join('; ')}` 
+    });
+    throw error;
+  }
 
   // Connect via WebSocket
   await connectToObs();
@@ -269,6 +308,21 @@ function setupIpcHandlers(): void {
       return { success: true };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return { success: false, error: errorMessage };
+    }
+  });
+
+  ipcMain.handle('run-diagnostics', async () => {
+    try {
+      if (!obsSupervisor) {
+        return { success: false, error: 'OBS Supervisor not initialized' };
+      }
+      const report = await obsSupervisor.runDiagnostics();
+      log(`Diagnostics complete: ${report.issues.length} issues, ${report.warnings.length} warnings`);
+      return { success: true, report };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      log(`Diagnostics failed: ${errorMessage}`);
       return { success: false, error: errorMessage };
     }
   });
