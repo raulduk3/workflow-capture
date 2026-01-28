@@ -104,21 +104,44 @@ export class NativeRecorder {
       throw new Error('No screen sources available');
     }
 
-    // Use the "Entire Screen" source if available, otherwise first screen
-    const entireScreen = sources.find(s => s.name === 'Entire Screen') || sources[0];
+    // Log all available sources for debugging
+    this.log(`Available screen sources:`);
+    sources.forEach((s, i) => {
+      this.log(`  [${i}] id: ${s.id}, name: "${s.name}"`);
+    });
+
+    // Find the best source for multi-screen capture:
+    // - On macOS: "Entire Screen" captures all displays
+    // - On Windows: Look for "Entire screen" (case may vary) or screen:0:0 which is often all screens
+    // - Fallback: Use the first screen source
+    let selectedSource = sources.find(s => 
+      s.name.toLowerCase() === 'entire screen' || 
+      s.name.toLowerCase().includes('entire')
+    );
+    
+    // On Windows, if no "Entire Screen", try to find screen 0 which often represents all displays
+    if (!selectedSource) {
+      selectedSource = sources.find(s => s.id.includes('screen:0:0'));
+    }
+    
+    // Final fallback: first source
+    if (!selectedSource) {
+      selectedSource = sources[0];
+    }
+    
+    this.log(`Selected source for recording: "${selectedSource.name}" (${selectedSource.id})`);
     
     // Set up output paths
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     this.tempWebmPath = path.join(this.outputDir, `recording_${timestamp}.webm`);
     this.finalMp4Path = path.join(this.outputDir, `recording_${timestamp}.mp4`);
 
-    this.log(`Starting recording, source: ${entireScreen.name}`);
     this.log(`Temp WebM: ${this.tempWebmPath}`);
     this.log(`Final MP4: ${this.finalMp4Path}`);
 
     // Send start command to renderer with source ID
     mainWindow.webContents.send('start-capture', {
-      sourceId: entireScreen.id,
+      sourceId: selectedSource.id,
       outputPath: this.tempWebmPath,
     });
 
