@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, screen, Tray, Menu, nativeImage } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -27,6 +27,7 @@ export interface SystemStatus {
 
 // Globals
 let mainWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
 let nativeRecorder: NativeRecorder | null = null;
 let sessionManager: SessionManager | null = null;
 let fileManager: FileManager | null = null;
@@ -72,6 +73,8 @@ function createWindow(): void {
     height: 320,
     resizable: false,
     maximizable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload.js'),
       contextIsolation: true,
@@ -88,6 +91,80 @@ function createWindow(): void {
   });
 
   log('Window created');
+}
+
+function createTray(): void {
+  // Create a simple 16x16 icon (red circle for recording indicator style)
+  const iconSize = 16;
+  const icon = nativeImage.createEmpty();
+  
+  // For Windows, we need a proper icon. Create a simple colored square.
+  const canvas = Buffer.alloc(iconSize * iconSize * 4);
+  for (let i = 0; i < iconSize * iconSize; i++) {
+    const x = i % iconSize;
+    const y = Math.floor(i / iconSize);
+    const centerX = iconSize / 2;
+    const centerY = iconSize / 2;
+    const radius = iconSize / 2 - 1;
+    const distance = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+    
+    if (distance <= radius) {
+      // Blue color for L7S branding
+      canvas[i * 4] = 74;      // R
+      canvas[i * 4 + 1] = 158; // G
+      canvas[i * 4 + 2] = 255; // B
+      canvas[i * 4 + 3] = 255; // A
+    } else {
+      canvas[i * 4 + 3] = 0;   // Transparent
+    }
+  }
+  
+  const trayIcon = nativeImage.createFromBuffer(canvas, { width: iconSize, height: iconSize });
+  tray = new Tray(trayIcon);
+  
+  const contextMenu = Menu.buildFromTemplate([
+    { 
+      label: 'Show Window', 
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      }
+    },
+    { 
+      label: 'Open Sessions Folder', 
+      click: async () => {
+        if (fileManager) {
+          await fileManager.openSessionsFolder();
+        }
+      }
+    },
+    { type: 'separator' },
+    { 
+      label: 'Quit', 
+      click: () => {
+        app.quit();
+      }
+    }
+  ]);
+  
+  tray.setToolTip('Workflow Capture');
+  tray.setContextMenu(contextMenu);
+  
+  // Click on tray icon to show/hide window
+  tray.on('click', () => {
+    if (mainWindow) {
+      if (mainWindow.isVisible()) {
+        mainWindow.hide();
+      } else {
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    }
+  });
+  
+  log('Tray created');
 }
 
 async function initialize(): Promise<void> {
@@ -275,6 +352,7 @@ if (!gotTheLock) {
     
     setupIpcHandlers();
     createWindow();
+    createTray();
 
     try {
       await initialize();
