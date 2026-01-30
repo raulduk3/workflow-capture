@@ -135,7 +135,7 @@ Collects all workflow capture sessions from a machine and uploads to a central l
 The script handles both legacy and date-organized session structures:
 
 ```
-%LOCALAPPDATA%\L7SWorkflowCapture\Sessions\
+C:\temp\L7SWorkflowCapture\Sessions\
 ├── 2026-01-29\                    # Date-organized (new)
 │   └── {session-uuid}\
 │       ├── session.json
@@ -250,7 +250,7 @@ If you prefer to control the installer version:
 |-----|------|
 | Install | `%TEMP%\L7S-WorkflowCapture-Install.log` |
 | Uninstall | `%TEMP%\L7S-WorkflowCapture-Uninstall.log` |
-| Application | `%LOCALAPPDATA%\L7SWorkflowCapture\logs\` |
+| Application | `C:\temp\L7SWorkflowCapture\logs\` |
 
 ### Testing Locally
 

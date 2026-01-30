@@ -72,7 +72,7 @@ src/
 ## Recording Storage
 
 Sessions are stored in:
-- **Windows**: `%TEMP%\L7SWorkflowCapture\Sessions\<session-id>\`
+- **Windows**: `C:\temp\L7SWorkflowCapture\Sessions\<session-id>\`
 - **macOS/Linux**: `~/L7SWorkflowCapture/Sessions/<session-id>/`
 
 Each session contains:

@@ -77,6 +77,42 @@ function Write-Log {
     Add-Content -Path $LogPath -Value $logMessage -ErrorAction SilentlyContinue
 }
 
+function Initialize-SessionsDirectory {
+    # Create the user-agnostic sessions directory with appropriate ACL permissions
+    # This allows all users to write session data to a shared location
+    
+    $captureDir = "C:\temp\L7SWorkflowCapture"
+    $sessionsDir = "$captureDir\Sessions"
+    
+    Write-Log "Initializing sessions directory: $captureDir"
+    
+    try {
+        # Create directory structure if it doesn't exist
+        if (-not (Test-Path $sessionsDir)) {
+            New-Item -ItemType Directory -Path $sessionsDir -Force | Out-Null
+            Write-Log "Created sessions directory: $sessionsDir"
+        }
+        
+        # Set ACL to allow all users to write
+        $acl = Get-Acl $captureDir
+        $usersRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            "Users",
+            "Modify",
+            "ContainerInherit,ObjectInherit",
+            "None",
+            "Allow"
+        )
+        $acl.SetAccessRule($usersRule)
+        Set-Acl $captureDir $acl
+        
+        Write-Log "Set permissions for all users on: $captureDir" -Level "SUCCESS"
+        return $true
+    } catch {
+        Write-Log "Failed to initialize sessions directory: $_" -Level "ERROR"
+        return $false
+    }
+}
+
 
 function Get-InstallerFromSource {
     param([string]$Source)
@@ -312,6 +348,14 @@ $installedPath = Test-Installation
 if (-not $installedPath) {
     Write-Log "Installation verification failed" -Level "ERROR"
     Remove-TempFiles
+    exit 3
+}
+
+# Initialize sessions directory with proper permissions for all users
+$sessionsInitialized = Initialize-SessionsDirectory
+if (-not $sessionsInitialized) {
+    Write-Log "Warning: Sessions directory initialization failed - users may need to run as admin once" -Level "WARN"
+}
     exit 3
 }
 

@@ -13,9 +13,9 @@ export class FileManager {
     const platform = os.platform();
     
     if (platform === 'win32') {
-      // Use AppData/Local for Windows - user-writable without admin permissions
-      const appDataPath = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-      this.sessionsPath = path.join(appDataPath, APP_CONSTANTS.APP_NAME, APP_CONSTANTS.SESSIONS_FOLDER);
+      // Use C:\temp for Windows - user-agnostic location for easy extraction
+      // This path is accessible by all users and simplifies RMM data collection
+      this.sessionsPath = path.join('C:', 'temp', APP_CONSTANTS.APP_NAME, APP_CONSTANTS.SESSIONS_FOLDER);
     } else {
       // macOS and Linux use home directory
       this.sessionsPath = path.join(os.homedir(), APP_CONSTANTS.APP_NAME, APP_CONSTANTS.SESSIONS_FOLDER);

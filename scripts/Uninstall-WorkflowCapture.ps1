@@ -142,7 +142,7 @@ function Export-SessionData {
         return $false
     }
     
-    $sessionsPath = "$env:LOCALAPPDATA\L7SWorkflowCapture\Sessions"
+    $sessionsPath = "C:\temp\L7SWorkflowCapture\Sessions"
     
     if (-not (Test-Path $sessionsPath)) {
         Write-Log "No session data found to export"
@@ -150,7 +150,7 @@ function Export-SessionData {
     }
     
     $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    $zipFileName = "$env:COMPUTERNAME`_$env:USERNAME`_final_$timestamp.zip"
+    $zipFileName = "$env:COMPUTERNAME`_final_$timestamp.zip"
     $exportFile = Join-Path $Destination $zipFileName
     
     try {
@@ -165,7 +165,7 @@ function Export-SessionData {
 }
 
 function Remove-SessionData {
-    $dataPath = "$env:LOCALAPPDATA\L7SWorkflowCapture"
+    $dataPath = "C:\temp\L7SWorkflowCapture"
     
     if (Test-Path $dataPath) {
         Write-Log "Removing session data: $dataPath"
@@ -333,7 +333,7 @@ if (-not $KeepData) {
     Remove-SessionData
 } else {
     Write-Log "Keeping session data as requested"
-    Write-Log "Data location: $env:LOCALAPPDATA\L7SWorkflowCapture"
+    Write-Log "Data location: C:\temp\L7SWorkflowCapture"
 }
 
 # Summary
