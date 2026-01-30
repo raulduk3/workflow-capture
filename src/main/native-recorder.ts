@@ -1,5 +1,4 @@
 import { desktopCapturer, screen, BrowserWindow, ipcMain } from 'electron';
-import * as path from 'path';
 import { RecorderStatus, CaptureStoppedResult, APP_CONSTANTS } from '../shared/types';
 
 // Note: ffmpeg-static kept as dependency for future batch MP4 conversion utility
@@ -14,7 +13,6 @@ export type { RecorderStatus } from '../shared/types';
  */
 export class NativeRecorder {
   private isRecording = false;
-  private outputDir: string | null = null;
   private outputWebmPath: string | null = null;
   private captureStoppedResolver: ((result: CaptureStoppedResult) => void) | null = null;
 
@@ -71,11 +69,12 @@ export class NativeRecorder {
   }
 
   /**
-   * Set the output directory for recording
+   * Set the full output path for the recording file
+   * @param filePath Full path including filename (e.g., /path/to/recording.webm)
    */
-  public setOutputDirectory(dir: string): void {
-    this.outputDir = dir;
-    this.log(`Output directory set to: ${dir}`);
+  public setOutputPath(filePath: string): void {
+    this.outputWebmPath = filePath;
+    this.log(`Output path set to: ${filePath}`);
   }
 
   /**
@@ -87,8 +86,8 @@ export class NativeRecorder {
       return false;
     }
 
-    if (!this.outputDir) {
-      throw new Error('Output directory not set');
+    if (!this.outputWebmPath) {
+      throw new Error('Output path not set');
     }
 
     // Get available sources
@@ -124,10 +123,7 @@ export class NativeRecorder {
     
     this.log(`Selected source for recording: "${selectedSource.name}" (${selectedSource.id})`);
     
-    // Set up output path - keep as WebM for best quality
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    this.outputWebmPath = path.join(this.outputDir, `recording_${timestamp}.webm`);
-
+    // Output path already set via setOutputPath()
     this.log(`Output WebM: ${this.outputWebmPath}`);
 
     // Send start command to renderer with source ID
@@ -203,7 +199,6 @@ export class NativeRecorder {
    */
   public reset(): void {
     this.isRecording = false;
-    this.outputDir = null;
     this.outputWebmPath = null;
     this.captureStoppedResolver = null;
     this.log('Recorder state reset');
@@ -226,7 +221,6 @@ export class NativeRecorder {
     }
     
     this.isRecording = false;
-    this.outputDir = null;
     this.outputWebmPath = null;
     this.log('Recorder disposed');
   }

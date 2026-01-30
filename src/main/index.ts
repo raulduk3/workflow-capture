@@ -101,7 +101,7 @@ function createWindow(): void {
       if (nativeRecorder?.getRecordingStatus()) {
         stopRecordingTimer();
         nativeRecorder.reset();
-        sessionManager?.endCurrentSession().catch(() => {});
+        sessionManager?.endCurrentSession();
       }
       currentSystemState = 'error';
       updateTrayMenu();
@@ -402,10 +402,11 @@ function setupIpcHandlers(): void {
         throw new Error('System not initialized');
       }
 
-      const session = await sessionManager.createSession(note);
+      // Start session and get the recording path (includes metadata in filename)
+      const recordingPath = await sessionManager.startSession(note);
       
-      // Set recording directory
-      nativeRecorder.setOutputDirectory(session.path);
+      // Set full recording path
+      nativeRecorder.setOutputPath(recordingPath);
       
       // Start recording
       await nativeRecorder.startRecording(mainWindow);
@@ -419,8 +420,8 @@ function setupIpcHandlers(): void {
       startRecordingTimer();
       sendStatus({ state: 'recording', message: 'Recording', recordingDuration: 0 });
       
-      log(`Recording started: ${session.id}`);
-      return { success: true, sessionId: session.id };
+      log(`Recording started: ${recordingPath}`);
+      return { success: true, sessionId: recordingPath };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       log(`Failed to start recording: ${errorMessage}`);
@@ -448,7 +449,7 @@ function setupIpcHandlers(): void {
       // Process recording (conversion happens in background while UI is responsive)
       const outputPath = await nativeRecorder.stopRecording(mainWindow);
       
-      await sessionManager.endCurrentSession();
+      sessionManager.endCurrentSession();
       sendStatus({ state: 'idle', message: 'Ready' });
       
       // Show toast notification with saved filename
@@ -497,20 +498,7 @@ function setupIpcHandlers(): void {
     }
   });
 
-  ipcMain.handle('export-sessions', async () => {
-    try {
-      if (!fileManager) {
-        throw new Error('File manager not initialized');
-      }
-      const exportPath = await fileManager.exportAllSessions();
-      log(`Sessions exported to: ${exportPath}`);
-      return { success: true, path: exportPath };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      log(`Failed to export sessions: ${errorMessage}`);
-      return { success: false, error: errorMessage };
-    }
-  });
+  // Note: export-sessions handler removed - extraction handled by RMM script directly
 
   // Handle recording data from renderer
   ipcMain.handle('save-recording-chunk', async (_event, chunk: ArrayBuffer, outputPath: string) => {

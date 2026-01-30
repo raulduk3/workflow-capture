@@ -145,21 +145,36 @@ function Export-SessionData {
     $sessionsPath = "C:\temp\L7SWorkflowCapture\Sessions"
     
     if (-not (Test-Path $sessionsPath)) {
-        Write-Log "No session data found to export"
+        Write-Log "No recording files found to export"
         return $true
     }
     
-    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    $zipFileName = "$env:COMPUTERNAME`_final_$timestamp.zip"
-    $exportFile = Join-Path $Destination $zipFileName
+    # Get all .webm files
+    $recordings = Get-ChildItem $sessionsPath -Filter "*.webm" -File -ErrorAction SilentlyContinue
+    
+    if (-not $recordings -or $recordings.Count -eq 0) {
+        Write-Log "No recording files found to export"
+        return $true
+    }
+    
+    # Create user folder in destination
+    $userFolder = Join-Path $Destination $env:USERNAME
+    
+    if (-not (Test-Path $userFolder)) {
+        New-Item -ItemType Directory -Path $userFolder -Force | Out-Null
+    }
     
     try {
-        Write-Log "Exporting session data to: $exportFile"
-        Compress-Archive -Path $sessionsPath -DestinationPath $exportFile -Force
-        Write-Log "Session data exported successfully" -Level "SUCCESS"
+        Write-Log "Exporting $($recordings.Count) recording(s) to: $userFolder"
+        foreach ($recording in $recordings) {
+            $destPath = Join-Path $userFolder $recording.Name
+            Copy-Item -Path $recording.FullName -Destination $destPath -Force
+            Write-Log "Exported: $($recording.Name)"
+        }
+        Write-Log "Recording files exported successfully" -Level "SUCCESS"
         return $true
     } catch {
-        Write-Log "Failed to export session data: $_" -Level "ERROR"
+        Write-Log "Failed to export recording files: $_" -Level "ERROR"
         return $false
     }
 }
@@ -168,12 +183,12 @@ function Remove-SessionData {
     $dataPath = "C:\temp\L7SWorkflowCapture"
     
     if (Test-Path $dataPath) {
-        Write-Log "Removing session data: $dataPath"
+        Write-Log "Removing recording files: $dataPath"
         try {
             Remove-Item -Path $dataPath -Recurse -Force -ErrorAction Stop
-            Write-Log "Session data removed" -Level "SUCCESS"
+            Write-Log "Recording files removed" -Level "SUCCESS"
         } catch {
-            Write-Log "Failed to remove some session data: $_" -Level "WARN"
+            Write-Log "Failed to remove some recording files: $_" -Level "WARN"
         }
     }
 }

@@ -1,28 +1,28 @@
 # =============================================================================
 # L7S Workflow Capture - Data Extraction Script for Ninja RMM
 # =============================================================================
-# This script collects all workflow capture sessions from the machine
-# and uploads them to a designated location (network share, cloud, etc.)
+# This script collects all workflow capture recordings from the machine
+# and copies them to a designated network share.
 #
 # Designed to be deployed via Ninja RMM for silent background extraction
+# Runs 2-3 times per day - automatically deletes local recordings after upload
 #
-# Data Structure:
+# IMPORTANT: Must run as the logged-in user (not SYSTEM) to access network share
+# In Ninja RMM: Set "Run As" to "Logged-in User" or "Current User"
+#
+# Data Structure (Local):
 #   C:\temp\L7SWorkflowCapture\Sessions\
-#   └── YYYY-MM-DD\                    (Date-organized folders)
-#       └── {session-uuid}\            (Individual session)
-#           ├── session.json           (Metadata: machine name, timestamps, notes)
-#           └── recording_*.webm       (Screen recording)
+#   └── YYYY-MM-DD_HHMMSS_machineName_taskDescription.webm
+#
+# Data Structure (Network Destination):
+#   \\server\share\
+#   └── {USERNAME}\                    (User-specific folder)
+#       └── YYYY-MM-DD_HHMMSS_machineName_taskDescription.webm
 # =============================================================================
 
 param(
     [Parameter(Mandatory=$false)]
-    [string]$DestinationPath = "\\server\share\WorkflowCaptures",
-    
-    [Parameter(Mandatory=$false)]
-    [string]$ClientName = $env:COMPUTERNAME,
-    
-    [Parameter(Mandatory=$false)]
-    [switch]$DeleteAfterUpload = $false,
+    [string]$DestinationPath = "\\Bulley-fs1\workflow",
     
     [Parameter(Mandatory=$false)]
     [switch]$Verbose = $false
@@ -44,26 +44,7 @@ function Get-SessionsPath {
     return Join-Path $BasePath "$AppName\$SessionsFolder"
 }
 
-function Get-SessionMetadata {
-    param([string]$SessionPath)
-    
-    $metadataFile = Join-Path $SessionPath "session.json"
-    
-    if (Test-Path $metadataFile) {
-        try {
-            $content = Get-Content $metadataFile -Raw
-            $metadata = $content | ConvertFrom-Json
-            return $metadata
-        } catch {
-            Write-Log "Warning: Could not parse metadata at $metadataFile"
-            return $null
-        }
-    }
-    
-    return $null
-}
-
-function Export-Sessions {
+function Copy-Recordings {
     param(
         [string]$DestinationBase
     )
@@ -75,84 +56,60 @@ function Export-Sessions {
         return $null
     }
     
-    Write-Log "Processing sessions from: $sessionsPath"
+    Write-Log "Processing recordings from: $sessionsPath"
     
-    # Count sessions
-    $sessionCount = 0
-    $totalSize = 0
+    # Get all .webm files
+    $recordings = Get-ChildItem $sessionsPath -Filter "*.webm" -File -ErrorAction SilentlyContinue
     
-    # Collect all sessions (supports date-organized structure)
-    $dateFolders = Get-ChildItem $sessionsPath -Directory -ErrorAction SilentlyContinue
+    if (-not $recordings -or $recordings.Count -eq 0) {
+        Write-Log "No recordings found"
+        return $null
+    }
     
-    foreach ($dateFolder in $dateFolders) {
-        # Check if this is a date folder (YYYY-MM-DD) or legacy session folder
-        if ($dateFolder.Name -match '^\d{4}-\d{2}-\d{2}$') {
-            # New date-organized structure
-            $sessionFolders = Get-ChildItem $dateFolder.FullName -Directory -ErrorAction SilentlyContinue
-            foreach ($session in $sessionFolders) {
-                $metadata = Get-SessionMetadata -SessionPath $session.FullName
-                if ($metadata) {
-                    $sessionCount++
-                    $folderSize = (Get-ChildItem $session.FullName -Recurse | Measure-Object -Property Length -Sum).Sum
-                    $totalSize += $folderSize
-                }
-            }
-        } else {
-            # Legacy structure (session folder directly under Sessions)
-            $metadata = Get-SessionMetadata -SessionPath $dateFolder.FullName
-            if ($metadata) {
-                $sessionCount++
-                $folderSize = (Get-ChildItem $dateFolder.FullName -Recurse | Measure-Object -Property Length -Sum).Sum
-                $totalSize += $folderSize
+    $totalSize = ($recordings | Measure-Object -Property Length -Sum).Sum
+    Write-Log "Found $($recordings.Count) recording(s) ($('{0:N2}' -f ($totalSize / 1MB)) MB)"
+    
+    # Create destination folder using USERNAME
+    $userFolder = Join-Path $DestinationBase $env:USERNAME
+    
+    if (-not (Test-Path $userFolder)) {
+        New-Item -ItemType Directory -Path $userFolder -Force | Out-Null
+        Write-Log "Created destination folder: $userFolder"
+    }
+    
+    $copiedCount = 0
+    $copiedFiles = @()
+    
+    foreach ($recording in $recordings) {
+        $destPath = Join-Path $userFolder $recording.Name
+        
+        try {
+            Copy-Item -Path $recording.FullName -Destination $destPath -Force
+            Write-Log "Copied: $($recording.Name)"
+            $copiedFiles += $recording.FullName
+            $copiedCount++
+        } catch {
+            Write-Log "ERROR: Failed to copy $($recording.Name): $_"
+        }
+    }
+    
+    # Delete successfully copied files
+    if ($copiedFiles.Count -gt 0) {
+        Write-Log "Cleaning up $($copiedFiles.Count) copied recording(s)..."
+        foreach ($file in $copiedFiles) {
+            try {
+                Remove-Item -Path $file -Force
+                Write-Log "Deleted: $(Split-Path $file -Leaf)"
+            } catch {
+                Write-Log "WARNING: Could not delete $file`: $_"
             }
         }
     }
     
-    if ($sessionCount -eq 0) {
-        Write-Log "No valid sessions found"
-        return $null
-    }
-    
-    Write-Log "Found $sessionCount sessions ($('{0:N2}' -f ($totalSize / 1MB)) MB)"
-    
-    # Create zip archive
-    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    $zipFileName = "${ClientName}_${timestamp}.zip"
-    $tempZipPath = Join-Path $env:TEMP $zipFileName
-    
-    try {
-        # Create the zip file
-        Write-Log "Creating archive: $zipFileName"
-        Compress-Archive -Path $sessionsPath -DestinationPath $tempZipPath -Force
-        
-        # Move to destination
-        $destinationFolder = Join-Path $DestinationBase $ClientName
-        if (-not (Test-Path $destinationFolder)) {
-            New-Item -ItemType Directory -Path $destinationFolder -Force | Out-Null
-        }
-        
-        $finalPath = Join-Path $destinationFolder $zipFileName
-        Move-Item -Path $tempZipPath -Destination $finalPath -Force
-        
-        Write-Log "Uploaded: $finalPath"
-        
-        # Optionally delete local sessions after successful upload
-        if ($DeleteAfterUpload) {
-            Write-Log "Cleaning up local sessions..."
-            Remove-Item -Path $sessionsPath -Recurse -Force
-        }
-        
-        return @{
-            Sessions = $sessionCount
-            SizeMB = [math]::Round($totalSize / 1MB, 2)
-            Archive = $finalPath
-        }
-    } catch {
-        Write-Log "Error creating archive: $_"
-        if (Test-Path $tempZipPath) {
-            Remove-Item $tempZipPath -Force -ErrorAction SilentlyContinue
-        }
-        return $null
+    return @{
+        Recordings = $copiedCount
+        SizeMB = [math]::Round($totalSize / 1MB, 2)
+        Destination = $userFolder
     }
 }
 
@@ -160,11 +117,21 @@ function Export-Sessions {
 # Main Execution
 # =============================================================================
 
+# Verify script is running as a user (not SYSTEM)
+$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+if ($currentUser -match "SYSTEM|LOCAL SERVICE|NETWORK SERVICE") {
+    Write-Log "ERROR: This script must run as a logged-in user, not $currentUser"
+    Write-Log "In Ninja RMM, set 'Run As' to 'Logged-in User' or 'Current User'"
+    exit 1
+}
+
 Write-Log "=========================================="
 Write-Log "L7S Workflow Capture - Data Extraction"
-Write-Log "Client: $ClientName"
+Write-Log "Running as: $currentUser"
+Write-Log "Username: $env:USERNAME"
 Write-Log "Source: $(Get-SessionsPath)"
-Write-Log "Destination: $DestinationPath"
+Write-Log "Destination: $DestinationPath\$env:USERNAME"
+Write-Log "Note: Local recordings will be deleted after upload"
 Write-Log "=========================================="
 
 # Validate destination
@@ -173,8 +140,8 @@ if (-not (Test-Path $DestinationPath)) {
     exit 1
 }
 
-# Process sessions from the shared location
-$result = Export-Sessions -DestinationBase $DestinationPath
+# Copy recordings to network share
+$result = Copy-Recordings -DestinationBase $DestinationPath
 
 # Summary
 Write-Log "=========================================="
@@ -182,11 +149,12 @@ Write-Log "Extraction Complete"
 Write-Log "=========================================="
 
 if ($result) {
-    Write-Log "Total sessions extracted: $($result.Sessions)"
+    Write-Log "Total recordings copied: $($result.Recordings)"
     Write-Log "Total data size: $('{0:N2}' -f $result.SizeMB) MB"
-    Write-Log "Archive: $($result.Archive)"
+    Write-Log "Destination: $($result.Destination)"
+    Write-Log "Local recordings cleaned up: Yes"
 } else {
-    Write-Log "No workflow capture sessions found on this machine"
+    Write-Log "No new workflow capture recordings found on this machine"
 }
 
 Write-Log "=========================================="

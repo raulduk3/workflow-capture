@@ -78,8 +78,9 @@ function Write-Log {
 }
 
 function Initialize-SessionsDirectory {
-    # Create the user-agnostic sessions directory with appropriate ACL permissions
-    # This allows all users to write session data to a shared location
+    # Create the sessions directory with appropriate ACL permissions
+    # This allows all users to write recording files to a shared location
+    # Flat structure: all .webm files directly in Sessions folder
     
     $captureDir = "C:\temp\L7SWorkflowCapture"
     $sessionsDir = "$captureDir\Sessions"
@@ -355,7 +356,6 @@ if (-not $installedPath) {
 $sessionsInitialized = Initialize-SessionsDirectory
 if (-not $sessionsInitialized) {
     Write-Log "Warning: Sessions directory initialization failed - users may need to run as admin once" -Level "WARN"
-}
     exit 3
 }
 

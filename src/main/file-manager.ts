@@ -2,8 +2,6 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { shell } from 'electron';
-import archiver from 'archiver';
-import { createWriteStream } from 'fs';
 import { APP_CONSTANTS } from '../shared/types';
 
 export class FileManager {
@@ -15,6 +13,7 @@ export class FileManager {
     if (platform === 'win32') {
       // Use C:\temp for Windows - user-agnostic location for easy extraction
       // This path is accessible by all users and simplifies RMM data collection
+      // Flat structure: all .webm files directly in Sessions folder
       this.sessionsPath = path.join('C:', 'temp', APP_CONSTANTS.APP_NAME, APP_CONSTANTS.SESSIONS_FOLDER);
     } else {
       // macOS and Linux use home directory
@@ -48,26 +47,46 @@ export class FileManager {
   }
 
   /**
-   * Get date folder name in YYYY-MM-DD format
+   * Sanitize a string for use in filenames
+   * Replaces invalid characters with underscores and limits length
    */
-  private getDateFolder(): string {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+  public sanitizeFilename(input: string, maxLength: number = 50): string {
+    // Replace invalid filename characters with underscores
+    let sanitized = input
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')  // Invalid filename chars
+      .replace(/\s+/g, '_')                      // Spaces to underscores
+      .replace(/_+/g, '_')                       // Collapse multiple underscores
+      .replace(/^_|_$/g, '');                    // Trim leading/trailing underscores
+    
+    // Limit length
+    if (sanitized.length > maxLength) {
+      sanitized = sanitized.substring(0, maxLength);
+    }
+    
+    return sanitized || 'no-description';
   }
 
-  public async createSessionDirectory(sessionId: string): Promise<string> {
-    // Organize sessions by date for better archiving
-    // Structure: Sessions/YYYY-MM-DD/session-uuid/
-    const dateFolder = this.getDateFolder();
-    const datePath = path.join(this.sessionsPath, dateFolder);
-    const sessionPath = path.join(datePath, sessionId);
+  /**
+   * Generate a recording filename with metadata encoded
+   * Format: YYYY-MM-DD_HHMMSS_machineName_taskDescription.webm
+   */
+  public generateRecordingFilename(note: string): string {
+    const now = new Date();
+    const date = now.toISOString().split('T')[0]; // YYYY-MM-DD
+    const time = now.toTimeString().split(' ')[0].replace(/:/g, ''); // HHMMSS
+    const machine = this.sanitizeFilename(os.hostname(), 20);
+    const task = this.sanitizeFilename(note || 'no-description', 50);
     
-    await fs.mkdir(sessionPath, { recursive: true });
-    this.log(`Session directory created: ${sessionPath}`);
-    return sessionPath;
+    return `${date}_${time}_${machine}_${task}.webm`;
+  }
+
+  /**
+   * Get the full path for a new recording file
+   */
+  public async getRecordingPath(note: string): Promise<string> {
+    await this.ensureSessionsDirectory();
+    const filename = this.generateRecordingFilename(note);
+    return path.join(this.sessionsPath, filename);
   }
 
   public async openSessionsFolder(): Promise<void> {
@@ -82,82 +101,32 @@ export class FileManager {
     this.log(`Opened sessions folder: ${this.sessionsPath}`);
   }
 
-  public async exportAllSessions(): Promise<string> {
-    await this.ensureSessionsDirectory();
-
-    const hostname = os.hostname();
-    const date = new Date().toISOString().split('T')[0];
-    const zipFilename = `L7SWorkflowCapture_${hostname}_${date}.zip`;
-    
-    // Export to user's Downloads folder or home directory
-    const platform = os.platform();
-    let exportDir: string;
-    
-    if (platform === 'win32') {
-      exportDir = path.join(os.homedir(), 'Downloads');
-    } else if (platform === 'darwin') {
-      exportDir = path.join(os.homedir(), 'Downloads');
-    } else {
-      exportDir = os.homedir();
-    }
-
-    const exportPath = path.join(exportDir, zipFilename);
-
-    this.log(`Exporting sessions to: ${exportPath}`);
-
-    return new Promise((resolve, reject) => {
-      const output = createWriteStream(exportPath);
-      const archive = archiver('zip', {
-        zlib: { level: 9 },
-      });
-
-      output.on('close', () => {
-        this.log(`Export complete: ${archive.pointer()} bytes`);
-        resolve(exportPath);
-      });
-
-      archive.on('error', (err) => {
-        this.log(`Export error: ${err.message}`);
-        reject(err);
-      });
-
-      archive.pipe(output);
-      archive.directory(this.sessionsPath, 'Sessions');
-      archive.finalize();
-    });
-  }
-
-  public async getSessionFiles(sessionId: string): Promise<string[]> {
-    const sessionPath = path.join(this.sessionsPath, sessionId);
-    
+  /**
+   * Get all recording files in the sessions directory
+   */
+  public async getRecordingFiles(): Promise<string[]> {
     try {
-      const files = await fs.readdir(sessionPath);
-      return files.map(f => path.join(sessionPath, f));
+      const files = await fs.readdir(this.sessionsPath);
+      return files
+        .filter(f => f.endsWith('.webm'))
+        .map(f => path.join(this.sessionsPath, f));
     } catch (error) {
-      this.log(`Error reading session files: ${error}`);
+      this.log(`Error reading recording files: ${error}`);
       return [];
     }
   }
 
-  public async sessionExists(sessionId: string): Promise<boolean> {
-    const sessionPath = path.join(this.sessionsPath, sessionId);
+  /**
+   * Delete a recording file
+   */
+  public async deleteRecording(filename: string): Promise<void> {
+    const filePath = path.join(this.sessionsPath, filename);
     
     try {
-      await fs.access(sessionPath);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  public async deleteSession(sessionId: string): Promise<void> {
-    const sessionPath = path.join(this.sessionsPath, sessionId);
-    
-    try {
-      await fs.rm(sessionPath, { recursive: true, force: true });
-      this.log(`Session deleted: ${sessionId}`);
+      await fs.unlink(filePath);
+      this.log(`Recording deleted: ${filename}`);
     } catch (error) {
-      this.log(`Error deleting session: ${error}`);
+      this.log(`Error deleting recording: ${error}`);
       throw error;
     }
   }
