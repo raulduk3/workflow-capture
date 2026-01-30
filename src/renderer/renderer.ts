@@ -33,6 +33,39 @@ const errorContainer = document.getElementById('error-container');
 const errorMessage = document.getElementById('error-message');
 const openFolderBtn = document.getElementById('open-folder-btn') as HTMLButtonElement | null;
 const exportBtn = document.getElementById('export-btn') as HTMLButtonElement | null;
+const toastNotification = document.getElementById('toast-notification');
+const toastMessage = document.getElementById('toast-message');
+
+// Toast notification timeout handle
+let toastTimeout: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Show a toast notification that fades away after a delay
+ */
+function showToast(message: string, durationMs: number = 3000): void {
+  if (!toastNotification || !toastMessage) return;
+  
+  // Clear any existing timeout
+  if (toastTimeout) {
+    clearTimeout(toastTimeout);
+    toastTimeout = null;
+  }
+  
+  // Reset state and show
+  toastNotification.classList.remove('hidden', 'fade-out');
+  toastMessage.textContent = message;
+  
+  // Start fade out after delay
+  toastTimeout = setTimeout(() => {
+    toastNotification.classList.add('fade-out');
+    
+    // Hide completely after fade animation
+    setTimeout(() => {
+      toastNotification.classList.add('hidden');
+      toastNotification.classList.remove('fade-out');
+    }, 500); // Match the CSS transition duration
+  }, durationMs);
+}
 
 // Validate required DOM elements
 function validateDOMElements(): boolean {
@@ -61,6 +94,7 @@ let mediaStream: MediaStream | null = null;
 let cleanupStatusListener: (() => void) | null = null;
 let cleanupStartCapture: (() => void) | null = null;
 let cleanupStopCapture: (() => void) | null = null;
+let cleanupRecordingSaved: (() => void) | null = null;
 
 // Format duration as HH:MM:SS
 function formatDuration(seconds: number): string {
@@ -373,7 +407,12 @@ function cleanup(): void {
   cleanupStatusListener?.();
   cleanupStartCapture?.();
   cleanupStopCapture?.();
+  cleanupRecordingSaved?.();
   cleanupMedia();
+  if (toastTimeout) {
+    clearTimeout(toastTimeout);
+    toastTimeout = null;
+  }
 }
 
 // Initialize
@@ -403,6 +442,11 @@ function init(): void {
 
   cleanupStopCapture = window.electronAPI.onStopCapture(() => {
     stopCapture();
+  });
+
+  // Listen for recording saved notification
+  cleanupRecordingSaved = window.electronAPI.onRecordingSaved((filename: string) => {
+    showToast(`Recording saved as ${filename}`, 3000);
   });
 
   // Clean up on page unload

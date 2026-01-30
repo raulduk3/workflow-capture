@@ -20,6 +20,7 @@ export interface ElectronAPI {
   onStatusUpdate: (callback: (status: SystemStatus) => void) => () => void;
   onStartCapture: (callback: (config: CaptureConfig) => void) => () => void;
   onStopCapture: (callback: () => void) => () => void;
+  onRecordingSaved: (callback: (filename: string) => void) => () => void;
 }
 
 const electronAPI: ElectronAPI = {
@@ -55,6 +56,14 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.on('stop-capture', handler);
     return () => {
       ipcRenderer.removeListener('stop-capture', handler);
+    };
+  },
+  
+  onRecordingSaved: (callback: (filename: string) => void) => {
+    const handler = (_event: IpcRendererEvent, filename: string) => callback(filename);
+    ipcRenderer.on('recording-saved', handler);
+    return () => {
+      ipcRenderer.removeListener('recording-saved', handler);
     };
   },
 };

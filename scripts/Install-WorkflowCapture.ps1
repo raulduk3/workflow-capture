@@ -29,19 +29,13 @@ param(
     [string]$InstallerUrl = "",
     
     [Parameter(Mandatory=$false)]
-    [string]$InstallerFileName = "L7S-Workflow-Capture-*-x64.exe",
+    [string]$InstallerFileName = "L7S-Workflow-Capture-1.0.7-x64.exe",
     
     [Parameter(Mandatory=$false)]
     [switch]$AutoStart = $false,
     
     [Parameter(Mandatory=$false)]
-    [switch]$ForceReinstall = $false,
-    
-    [Parameter(Mandatory=$false)]
-    [switch]$AllUsers = $false,
-    
-    [Parameter(Mandatory=$false)]
-    [switch]$SkipGitHub = $false
+    [switch]$AllUsers = $false
 )
 
 # =============================================================================
@@ -50,8 +44,9 @@ param(
 
 $AppName = "L7S Workflow Capture"
 $AppPublisher = "Layer 7 Systems"
+$ReleaseVersion = "v1.0.7"
 $GitHubRepo = "raulduk3/workflow-capture"
-$GitHubApiUrl = "https://api.github.com/repos/$GitHubRepo/releases/latest"
+$GitHubReleaseUrl = "https://github.com/$GitHubRepo/releases/download/$ReleaseVersion/$InstallerFileName"
 $InstallPath = "$env:LOCALAPPDATA\Programs\l7s-workflow-capture"
 $LogPath = "$env:TEMP\L7S-WorkflowCapture-Install.log"
 $TempInstallerPath = "$env:TEMP\L7S-Workflow-Capture-Setup.exe"
@@ -82,70 +77,6 @@ function Write-Log {
     Add-Content -Path $LogPath -Value $logMessage -ErrorAction SilentlyContinue
 }
 
-function Test-WindowsVersion {
-    $os = Get-CimInstance -ClassName Win32_OperatingSystem
-    $version = [System.Version]$os.Version
-    
-    # Windows 11 is build 22000+, Windows 10 is 10.0.x
-    $isWindows11 = $version.Build -ge 22000
-    $isWindows10 = $version.Major -eq 10 -and $version.Build -lt 22000
-    
-    Write-Log "Detected OS: $($os.Caption) (Build $($version.Build))"
-    
-    if (-not ($isWindows11 -or $isWindows10)) {
-        Write-Log "Unsupported operating system. Requires Windows 10 or 11." -Level "ERROR"
-        return $false
-    }
-    
-    # Check for Pro/Enterprise/Education editions
-    $edition = $os.Caption
-    if ($edition -notmatch "Pro|Enterprise|Education") {
-        Write-Log "Warning: Best experience on Pro/Enterprise editions. Current: $edition" -Level "WARN"
-    }
-    
-    return $true
-}
-
-function Test-ExistingInstallation {
-    # Check common installation locations
-    $installLocations = @(
-        "$env:LOCALAPPDATA\Programs\l7s-workflow-capture\L7S Workflow Capture.exe",
-        "$env:LOCALAPPDATA\Programs\l7s-workflow-capture\L7S-Workflow-Capture.exe",
-        "${env:ProgramFiles}\L7S Workflow Capture\L7S Workflow Capture.exe",
-        "${env:ProgramFiles(x86)}\L7S Workflow Capture\L7S Workflow Capture.exe"
-    )
-    
-    foreach ($location in $installLocations) {
-        if (Test-Path $location) {
-            $fileInfo = Get-Item $location
-            Write-Log "Found existing installation at: $location"
-            Write-Log "  Version: $($fileInfo.VersionInfo.FileVersion)"
-            Write-Log "  Modified: $($fileInfo.LastWriteTime)"
-            return $location
-        }
-    }
-    
-    # Check registry for uninstall info
-    $uninstallKeys = @(
-        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
-        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
-        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
-    )
-    
-    foreach ($keyPath in $uninstallKeys) {
-        $apps = Get-ItemProperty $keyPath -ErrorAction SilentlyContinue | 
-                Where-Object { $_.DisplayName -like "*Workflow Capture*" -or $_.Publisher -eq $AppPublisher }
-        
-        if ($apps) {
-            foreach ($app in $apps) {
-                Write-Log "Found in registry: $($app.DisplayName) v$($app.DisplayVersion)"
-                return $app.InstallLocation
-            }
-        }
-    }
-    
-    return $null
-}
 
 function Get-InstallerFromSource {
     param([string]$Source)
@@ -207,55 +138,20 @@ function Get-InstallerFromUrl {
 }
 
 function Get-InstallerFromGitHub {
-    Write-Log "Fetching latest release from GitHub: $GitHubRepo"
+    Write-Log "Downloading release $ReleaseVersion from GitHub: $GitHubRepo"
     
     try {
         # Configure TLS 1.2
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         
-        # Query GitHub API for latest release
-        $headers = @{
-            "Accept" = "application/vnd.github.v3+json"
-            "User-Agent" = "L7S-Workflow-Capture-Installer"
-        }
-        
-        $response = Invoke-RestMethod -Uri $GitHubApiUrl -Headers $headers -Method Get -ErrorAction Stop
-        
-        $version = $response.tag_name
-        Write-Log "Latest version: $version"
-        
-        # Find the Windows installer asset
-        $asset = $response.assets | Where-Object { 
-            $_.name -like "*.exe" -and $_.name -like "*x64*" 
-        } | Select-Object -First 1
-        
-        if (-not $asset) {
-            Write-Log "No Windows installer found in release assets" -Level "ERROR"
-            return $null
-        }
-        
-        $downloadUrl = $asset.browser_download_url
-        $fileName = $asset.name
-        $fileSize = $asset.size
-        
-        Write-Log "Found installer: $fileName ($('{0:N2}' -f ($fileSize / 1MB)) MB)"
-        Write-Log "Download URL: $downloadUrl"
-        
-        # Download the installer
-        Write-Log "Downloading..."
+        Write-Log "Download URL: $GitHubReleaseUrl"
         $webClient = New-Object System.Net.WebClient
         $webClient.Headers.Add("User-Agent", "L7S-Workflow-Capture-Installer")
-        $webClient.DownloadFile($downloadUrl, $TempInstallerPath)
+        $webClient.DownloadFile($GitHubReleaseUrl, $TempInstallerPath)
         
         if (Test-Path $TempInstallerPath) {
             $downloadedSize = (Get-Item $TempInstallerPath).Length
             Write-Log "Downloaded successfully ($('{0:N2}' -f ($downloadedSize / 1MB)) MB)" -Level "SUCCESS"
-            
-            # Verify file size matches expected
-            if ($downloadedSize -ne $fileSize) {
-                Write-Log "Warning: Downloaded file size ($downloadedSize) doesn't match expected ($fileSize)" -Level "WARN"
-            }
-            
             return $TempInstallerPath
         }
     } catch {
@@ -311,7 +207,7 @@ function Set-AutoStart {
     Write-Log "Configuring auto-start..."
     
     $startupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
-    $shortcutPath = Join-Path $startupPath "L7S Workflow Capture.lnk"
+    $shortcutPath = Join-Path $startupPath "Workflow Capture.lnk"
     
     try {
         $shell = New-Object -ComObject WScript.Shell
@@ -331,7 +227,7 @@ function Set-AutoStart {
 
 function Remove-AutoStart {
     $startupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
-    $shortcutPath = Join-Path $startupPath "L7S Workflow Capture.lnk"
+    $shortcutPath = Join-Path $startupPath "Workflow Capture.lnk"
     
     if (Test-Path $shortcutPath) {
         Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue
@@ -343,10 +239,11 @@ function Test-Installation {
     # Wait a moment for installation to finalize
     Start-Sleep -Seconds 2
     
-    # Check for the installed executable
+    # Check for the installed executable (actual name is "Workflow Capture.exe")
     $possiblePaths = @(
-        "$env:LOCALAPPDATA\Programs\l7s-workflow-capture\L7S Workflow Capture.exe",
-        "$env:LOCALAPPDATA\Programs\l7s-workflow-capture\L7S-Workflow-Capture.exe"
+        "$InstallPath\Workflow Capture.exe",
+        "${env:ProgramFiles}\Workflow Capture\Workflow Capture.exe",
+        "${env:ProgramFiles(x86)}\Workflow Capture\Workflow Capture.exe"
     )
     
     foreach ($path in $possiblePaths) {
@@ -379,24 +276,6 @@ Write-Log "Computer: $env:COMPUTERNAME"
 Write-Log "User: $env:USERNAME"
 Write-Log "=========================================="
 
-# Validate Windows version
-if (-not (Test-WindowsVersion)) {
-    exit 4
-}
-
-# Check for existing installation
-$existingInstall = Test-ExistingInstallation
-
-if ($existingInstall -and -not $ForceReinstall) {
-    Write-Log "Application is already installed. Use -ForceReinstall to update." -Level "WARN"
-    Write-Log "Installation path: $existingInstall"
-    exit 0
-}
-
-if ($existingInstall -and $ForceReinstall) {
-    Write-Log "Force reinstall requested - proceeding with installation"
-}
-
 # Get installer - Priority: URL > Source > GitHub
 $installerPath = $null
 
@@ -408,12 +287,10 @@ if ($InstallerUrl) {
     # Network/local source provided
     Write-Log "Using provided source path for installer"
     $installerPath = Get-InstallerFromSource -Source $InstallerSource
-} elseif (-not $SkipGitHub) {
-    # Default: Download latest from GitHub
-    Write-Log "No installer source specified - downloading latest from GitHub"
-    $installerPath = Get-InstallerFromGitHub
 } else {
-    Write-Log "No installer source available" -Level "ERROR"
+    # Default: Download specific release from GitHub
+    Write-Log "No installer source specified - downloading $ReleaseVersion from GitHub"
+    $installerPath = Get-InstallerFromGitHub
 }
 
 if (-not $installerPath) {

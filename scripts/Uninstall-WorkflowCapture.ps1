@@ -64,9 +64,7 @@ function Stop-ApplicationProcesses {
     Write-Log "Checking for running instances..."
     
     $processNames = @(
-        "L7S Workflow Capture",
-        "L7S-Workflow-Capture",
-        "l7s-workflow-capture"
+        "Workflow Capture"
     )
     
     foreach ($name in $processNames) {
@@ -114,13 +112,13 @@ function Find-UninstallString {
 function Find-ManualInstallation {
     $possiblePaths = @(
         "$env:LOCALAPPDATA\Programs\l7s-workflow-capture",
-        "${env:ProgramFiles}\L7S Workflow Capture",
-        "${env:ProgramFiles(x86)}\L7S Workflow Capture"
+        "${env:ProgramFiles}\Workflow Capture",
+        "${env:ProgramFiles(x86)}\Workflow Capture"
     )
     
     foreach ($path in $possiblePaths) {
         if (Test-Path $path) {
-            $uninstaller = Join-Path $path "Uninstall L7S Workflow Capture.exe"
+            $uninstaller = Join-Path $path "Uninstall Workflow Capture.exe"
             if (Test-Path $uninstaller) {
                 Write-Log "Found manual installation at: $path"
                 return @{
@@ -182,7 +180,7 @@ function Remove-SessionData {
 
 function Remove-AutoStartEntry {
     $startupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
-    $shortcutPath = Join-Path $startupPath "L7S Workflow Capture.lnk"
+    $shortcutPath = Join-Path $startupPath "Workflow Capture.lnk"
     
     if (Test-Path $shortcutPath) {
         Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue
@@ -197,7 +195,7 @@ function Remove-DesktopShortcuts {
     )
     
     foreach ($desktop in $desktopPaths) {
-        $shortcut = Join-Path $desktop "L7S Workflow Capture.lnk"
+        $shortcut = Join-Path $desktop "Workflow Capture.lnk"
         if (Test-Path $shortcut) {
             Remove-Item $shortcut -Force -ErrorAction SilentlyContinue
             Write-Log "Removed desktop shortcut: $shortcut"

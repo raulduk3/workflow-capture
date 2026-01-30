@@ -52,6 +52,21 @@ function sendStatus(status: SystemStatus): void {
   updateTrayMenu();
 }
 
+function sendRecordingSavedNotification(outputPath: string): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    // Extract just the filename from the full path
+    const filename = path.basename(outputPath);
+    
+    if (mainWindow.webContents.isLoading()) {
+      mainWindow.webContents.once('did-finish-load', () => {
+        mainWindow?.webContents.send('recording-saved', filename);
+      });
+    } else {
+      mainWindow.webContents.send('recording-saved', filename);
+    }
+  }
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 400,
@@ -133,12 +148,13 @@ function updateTrayMenu(): void {
       click: async () => {
         if (isRecording && !isProcessing && nativeRecorder && mainWindow) {
           // Stop recording - do all work while window is still hidden
+          let outputPath: string | null = null;
           try {
             stopRecordingTimer();
             currentSystemState = 'processing';
             updateTrayMenu();
             
-            const outputPath = await nativeRecorder.stopRecording(mainWindow);
+            outputPath = await nativeRecorder.stopRecording(mainWindow);
             await sessionManager?.endCurrentSession();
             
             log(`Recording stopped via tray menu, saved to: ${outputPath}`);
@@ -153,6 +169,11 @@ function updateTrayMenu(): void {
           mainWindow.show();
           mainWindow.focus();
           sendStatus({ state: 'idle', message: 'Ready' });
+          
+          // Show toast notification with saved filename
+          if (outputPath) {
+            sendRecordingSavedNotification(outputPath);
+          }
         } else if (mainWindow) {
           mainWindow.show();
           mainWindow.focus();
@@ -232,12 +253,13 @@ function createTray(): void {
     
     if (isRecording && !isProcessing && nativeRecorder && mainWindow) {
       // Stop recording - do all work while window is still hidden
+      let outputPath: string | null = null;
       try {
         stopRecordingTimer();
         currentSystemState = 'processing';
         updateTrayMenu();
         
-        const outputPath = await nativeRecorder.stopRecording(mainWindow);
+        outputPath = await nativeRecorder.stopRecording(mainWindow);
         await sessionManager?.endCurrentSession();
         
         log(`Recording stopped via tray, saved to: ${outputPath}`);
@@ -252,6 +274,11 @@ function createTray(): void {
       mainWindow.show();
       mainWindow.focus();
       sendStatus({ state: 'idle', message: 'Ready' });
+      
+      // Show toast notification with saved filename
+      if (outputPath) {
+        sendRecordingSavedNotification(outputPath);
+      }
     } else if (mainWindow) {
       if (mainWindow.isVisible()) {
         mainWindow.hide();
@@ -356,6 +383,9 @@ async function autoStopRecording(): Promise<void> {
     currentSystemState = 'idle';
     updateTrayMenu();
     sendStatus({ state: 'idle', message: 'Ready' });
+    
+    // Show toast notification with saved filename
+    sendRecordingSavedNotification(outputPath);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     log(`Failed to auto-stop recording: ${errorMessage}`);
@@ -420,6 +450,9 @@ function setupIpcHandlers(): void {
       
       await sessionManager.endCurrentSession();
       sendStatus({ state: 'idle', message: 'Ready' });
+      
+      // Show toast notification with saved filename
+      sendRecordingSavedNotification(outputPath);
       
       log(`Recording stopped, saved to: ${outputPath}`);
       return { success: true, path: outputPath };
