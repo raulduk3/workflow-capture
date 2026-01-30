@@ -1,28 +1,13 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import type { 
+  SystemStatus, 
+  IpcResult, 
+  CaptureConfig, 
+  CaptureStoppedResult 
+} from './shared/types';
 
-export interface SystemStatus {
-  state: 'starting' | 'idle' | 'recording' | 'processing' | 'error';
-  message: string;
-  recordingDuration?: number;
-  error?: string;
-}
-
-export interface IpcResult {
-  success: boolean;
-  error?: string;
-  sessionId?: string;
-  path?: string;
-}
-
-export interface CaptureConfig {
-  sourceId: string;
-  outputPath: string;
-}
-
-export interface CaptureStoppedResult {
-  success: boolean;
-  error?: string;
-}
+// Re-export types for external use
+export type { SystemStatus, IpcResult, CaptureConfig, CaptureStoppedResult };
 
 export interface ElectronAPI {
   startRecording: (note: string) => Promise<IpcResult>;
@@ -32,9 +17,9 @@ export interface ElectronAPI {
   exportSessions: () => Promise<IpcResult>;
   saveRecordingData: (data: ArrayBuffer, outputPath: string) => Promise<IpcResult>;
   notifyCaptureStopped: (result: CaptureStoppedResult) => Promise<void>;
-  onStatusUpdate: (callback: (status: SystemStatus) => void) => void;
-  onStartCapture: (callback: (config: CaptureConfig) => void) => void;
-  onStopCapture: (callback: () => void) => void;
+  onStatusUpdate: (callback: (status: SystemStatus) => void) => () => void;
+  onStartCapture: (callback: (config: CaptureConfig) => void) => () => void;
+  onStopCapture: (callback: () => void) => () => void;
 }
 
 const electronAPI: ElectronAPI = {
@@ -47,20 +32,30 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.invoke('save-recording-chunk', data, outputPath),
   notifyCaptureStopped: (result: CaptureStoppedResult) => 
     ipcRenderer.invoke('capture-stopped', result),
+  
+  // Return cleanup functions to prevent memory leaks
   onStatusUpdate: (callback: (status: SystemStatus) => void) => {
-    ipcRenderer.on('system-status', (_event, status: SystemStatus) => {
-      callback(status);
-    });
+    const handler = (_event: IpcRendererEvent, status: SystemStatus) => callback(status);
+    ipcRenderer.on('system-status', handler);
+    return () => {
+      ipcRenderer.removeListener('system-status', handler);
+    };
   },
+  
   onStartCapture: (callback: (config: CaptureConfig) => void) => {
-    ipcRenderer.on('start-capture', (_event, config: CaptureConfig) => {
-      callback(config);
-    });
+    const handler = (_event: IpcRendererEvent, config: CaptureConfig) => callback(config);
+    ipcRenderer.on('start-capture', handler);
+    return () => {
+      ipcRenderer.removeListener('start-capture', handler);
+    };
   },
+  
   onStopCapture: (callback: () => void) => {
-    ipcRenderer.on('stop-capture', () => {
-      callback();
-    });
+    const handler = () => callback();
+    ipcRenderer.on('stop-capture', handler);
+    return () => {
+      ipcRenderer.removeListener('stop-capture', handler);
+    };
   },
 };
 

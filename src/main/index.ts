@@ -1,10 +1,10 @@
-import { app, BrowserWindow, ipcMain, shell, screen, Tray, Menu, nativeImage } from 'electron';
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
-import * as os from 'os';
 import { NativeRecorder } from './native-recorder';
 import { SessionManager } from './session-manager';
 import { FileManager } from './file-manager';
+import { SystemState, SystemStatus, APP_CONSTANTS } from '../shared/types';
 
 // Global error handlers
 process.on('uncaughtException', (error) => {
@@ -15,15 +15,8 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('[Main] Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-// Types
-export type SystemState = 'starting' | 'idle' | 'recording' | 'processing' | 'error';
-
-export interface SystemStatus {
-  state: SystemState;
-  message: string;
-  recordingDuration?: number;
-  error?: string;
-}
+// Re-export types from shared for backwards compatibility
+export type { SystemState, SystemStatus } from '../shared/types';
 
 // Globals
 let mainWindow: BrowserWindow | null = null;
@@ -33,6 +26,7 @@ let sessionManager: SessionManager | null = null;
 let fileManager: FileManager | null = null;
 let recordingStartTime: number | null = null;
 let recordingTimer: NodeJS.Timeout | null = null;
+let maxDurationTimer: NodeJS.Timeout | null = null;
 let isQuitting = false;
 
 function log(message: string): void {
@@ -56,29 +50,6 @@ function sendStatus(status: SystemStatus): void {
   
   // Update tray to reflect new state
   updateTrayMenu();
-}
-
-/**
- * Get the sessions directory path
- */
-function getSessionsPath(): string {
-  const platform = os.platform();
-  let sessionsPath: string;
-  
-  if (platform === 'win32') {
-    const appDataPath = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-    sessionsPath = path.join(appDataPath, 'L7SWorkflowCapture', 'Sessions');
-  } else {
-    sessionsPath = path.join(os.homedir(), 'L7SWorkflowCapture', 'Sessions');
-  }
-  
-  // Create if needed
-  if (!fs.existsSync(sessionsPath)) {
-    fs.mkdirSync(sessionsPath, { recursive: true });
-    log(`Created sessions directory: ${sessionsPath}`);
-  }
-  
-  return sessionsPath;
 }
 
 function createWindow(): void {
@@ -105,6 +76,30 @@ function createWindow(): void {
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
     mainWindow?.focus();
+  });
+
+  // Handle renderer process crash
+  mainWindow.webContents.on('render-process-gone', (event, details) => {
+    log(`Renderer process gone: ${details.reason}`);
+    if (details.reason === 'crashed' || details.reason === 'killed') {
+      // Reset recording state if renderer crashes during recording
+      if (nativeRecorder?.getRecordingStatus()) {
+        stopRecordingTimer();
+        nativeRecorder.reset();
+        sessionManager?.endCurrentSession().catch(() => {});
+      }
+      currentSystemState = 'error';
+      updateTrayMenu();
+    }
+  });
+
+  // Handle unresponsive renderer
+  mainWindow.webContents.on('unresponsive', () => {
+    log('Renderer became unresponsive');
+  });
+
+  mainWindow.webContents.on('responsive', () => {
+    log('Renderer became responsive again');
   });
 
   // Hide to tray instead of closing
@@ -306,7 +301,13 @@ function startRecordingTimer(): void {
       const duration = Math.floor((Date.now() - recordingStartTime) / 1000);
       sendStatus({ state: 'recording', message: 'Recording', recordingDuration: duration });
     }
-  }, 1000);
+  }, APP_CONSTANTS.TIMER_INTERVAL_MS);
+  
+  // Set up max duration timer - auto-stop after 5 minutes
+  maxDurationTimer = setTimeout(async () => {
+    log('Max recording duration (5 minutes) reached, auto-stopping...');
+    await autoStopRecording();
+  }, APP_CONSTANTS.MAX_RECORDING_DURATION_MS);
 }
 
 function stopRecordingTimer(): void {
@@ -314,7 +315,54 @@ function stopRecordingTimer(): void {
     clearInterval(recordingTimer);
     recordingTimer = null;
   }
+  if (maxDurationTimer) {
+    clearTimeout(maxDurationTimer);
+    maxDurationTimer = null;
+  }
   recordingStartTime = null;
+}
+
+/**
+ * Auto-stop recording when max duration is reached
+ * This is called by the max duration timer
+ */
+async function autoStopRecording(): Promise<void> {
+  if (!nativeRecorder || !mainWindow || !sessionManager) {
+    log('Cannot auto-stop: system not initialized');
+    return;
+  }
+  
+  const isRecording = nativeRecorder.getRecordingStatus();
+  if (!isRecording) {
+    log('Auto-stop called but not recording');
+    return;
+  }
+  
+  try {
+    stopRecordingTimer();
+    currentSystemState = 'processing';
+    updateTrayMenu();
+    
+    // Show window immediately with processing state
+    mainWindow.show();
+    mainWindow.focus();
+    sendStatus({ state: 'processing', message: 'Max time reached. Saving...' });
+    
+    const outputPath = await nativeRecorder.stopRecording(mainWindow);
+    await sessionManager.endCurrentSession();
+    
+    log(`Auto-stopped recording saved to: ${outputPath}`);
+    
+    currentSystemState = 'idle';
+    updateTrayMenu();
+    sendStatus({ state: 'idle', message: 'Ready' });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    log(`Failed to auto-stop recording: ${errorMessage}`);
+    currentSystemState = 'idle';
+    updateTrayMenu();
+    sendStatus({ state: 'idle', message: 'Ready' });
+  }
 }
 
 function setupIpcHandlers(): void {
@@ -503,10 +551,16 @@ if (!gotTheLock) {
     
     stopRecordingTimer();
 
-    if (nativeRecorder && mainWindow) {
+    // Set a maximum timeout for cleanup to prevent hanging
+    const cleanupTimeout = setTimeout(() => {
+      log('Cleanup timeout reached, forcing quit');
+      app.exit(1);
+    }, 10000); // 10 second timeout
+
+    if (nativeRecorder) {
       try {
         const isRecording = nativeRecorder.getRecordingStatus();
-        if (isRecording) {
+        if (isRecording && mainWindow && !mainWindow.isDestroyed()) {
           log('Stopping active recording...');
           await nativeRecorder.stopRecording(mainWindow);
           await sessionManager?.endCurrentSession();
@@ -514,6 +568,16 @@ if (!gotTheLock) {
       } catch (error) {
         log(`Error during recording cleanup: ${error}`);
       }
+      
+      // Dispose recorder resources
+      nativeRecorder.dispose();
+    }
+    
+    clearTimeout(cleanupTimeout);
+    // Destroy tray icon
+    if (tray) {
+      tray.destroy();
+      tray = null;
     }
     
     log('Cleanup complete, quitting app');
@@ -521,12 +585,20 @@ if (!gotTheLock) {
   });
 
   app.on('window-all-closed', () => {
-    app.quit();
+    // On macOS, apps typically stay running in the tray
+    // On Windows/Linux, quit when all windows are closed (unless we have tray)
+    if (process.platform !== 'darwin' && !tray) {
+      app.quit();
+    }
   });
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    // On macOS, re-create window when dock icon is clicked
+    if (!isQuitting && BrowserWindow.getAllWindows().length === 0) {
       createWindow();
+    } else if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
     }
   });
 }

@@ -3,20 +3,10 @@ import * as os from 'os';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { FileManager } from './file-manager';
+import { SessionMetadata, Session } from '../shared/types';
 
-export interface SessionMetadata {
-  session_id: string;
-  started_at: string;
-  ended_at: string | null;
-  note: string;
-  machine_name: string;
-}
-
-export interface Session {
-  id: string;
-  path: string;
-  metadata: SessionMetadata;
-}
+// Re-export types for backwards compatibility
+export type { SessionMetadata, Session } from '../shared/types';
 
 export class SessionManager {
   private fileManager: FileManager;
@@ -98,19 +88,43 @@ export class SessionManager {
     const sessionsDir = this.fileManager.getSessionsPath();
 
     try {
-      const entries = await fs.readdir(sessionsDir, { withFileTypes: true });
+      const dateEntries = await fs.readdir(sessionsDir, { withFileTypes: true });
 
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          const metadataPath = path.join(sessionsDir, entry.name, 'session.json');
+      for (const dateEntry of dateEntries) {
+        if (dateEntry.isDirectory()) {
+          const datePath = path.join(sessionsDir, dateEntry.name);
           
-          try {
-            const content = await fs.readFile(metadataPath, 'utf-8');
-            const metadata = JSON.parse(content) as SessionMetadata;
-            sessions.push(metadata);
-          } catch {
-            // Skip directories without valid metadata
-            this.log(`Skipping invalid session directory: ${entry.name}`);
+          // Check if this is a date folder (YYYY-MM-DD) or a legacy session folder
+          const isDateFolder = /^\d{4}-\d{2}-\d{2}$/.test(dateEntry.name);
+          
+          if (isDateFolder) {
+            // New date-organized structure: Sessions/YYYY-MM-DD/session-uuid/
+            const sessionEntries = await fs.readdir(datePath, { withFileTypes: true });
+            
+            for (const sessionEntry of sessionEntries) {
+              if (sessionEntry.isDirectory()) {
+                const metadataPath = path.join(datePath, sessionEntry.name, 'session.json');
+                
+                try {
+                  const content = await fs.readFile(metadataPath, 'utf-8');
+                  const metadata = JSON.parse(content) as SessionMetadata;
+                  sessions.push(metadata);
+                } catch {
+                  this.log(`Skipping invalid session directory: ${dateEntry.name}/${sessionEntry.name}`);
+                }
+              }
+            }
+          } else {
+            // Legacy structure: Sessions/session-uuid/ (for backwards compatibility)
+            const metadataPath = path.join(datePath, 'session.json');
+            
+            try {
+              const content = await fs.readFile(metadataPath, 'utf-8');
+              const metadata = JSON.parse(content) as SessionMetadata;
+              sessions.push(metadata);
+            } catch {
+              this.log(`Skipping invalid session directory: ${dateEntry.name}`);
+            }
           }
         }
       }

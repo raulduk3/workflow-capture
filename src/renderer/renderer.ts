@@ -1,3 +1,9 @@
+/**
+ * Renderer process for Workflow Capture application
+ * Handles UI updates and media recording via MediaRecorder API
+ */
+
+// Types (duplicated from shared since renderer can't import directly)
 interface SystemStatus {
   state: 'starting' | 'idle' | 'recording' | 'processing' | 'error';
   message: string;
@@ -10,19 +16,38 @@ interface CaptureConfig {
   outputPath: string;
 }
 
-// DOM Elements
-const statusIndicator = document.getElementById('status-indicator') as HTMLDivElement;
-const statusDot = document.getElementById('status-dot') as HTMLSpanElement;
-const statusText = document.getElementById('status-text') as HTMLSpanElement;
-const timerDisplay = document.getElementById('timer-display') as HTMLDivElement;
-const timer = document.getElementById('timer') as HTMLSpanElement;
-const taskNote = document.getElementById('task-note') as HTMLInputElement;
-const recordBtn = document.getElementById('record-btn') as HTMLButtonElement;
-const recordBtnText = document.getElementById('record-btn-text') as HTMLSpanElement;
-const errorContainer = document.getElementById('error-container') as HTMLDivElement;
-const errorMessage = document.getElementById('error-message') as HTMLParagraphElement;
-const openFolderBtn = document.getElementById('open-folder-btn') as HTMLButtonElement;
-const exportBtn = document.getElementById('export-btn') as HTMLButtonElement;
+// Constants
+const VIDEO_BITRATE = 5_000_000; // 5 Mbps
+const CHUNK_INTERVAL_MS = 1000;
+
+// DOM Elements - use assertion after null check
+const statusIndicator = document.getElementById('status-indicator');
+const statusDot = document.getElementById('status-dot');
+const statusText = document.getElementById('status-text');
+const timerDisplay = document.getElementById('timer-display');
+const timer = document.getElementById('timer');
+const taskNote = document.getElementById('task-note') as HTMLInputElement | null;
+const recordBtn = document.getElementById('record-btn') as HTMLButtonElement | null;
+const recordBtnText = document.getElementById('record-btn-text');
+const errorContainer = document.getElementById('error-container');
+const errorMessage = document.getElementById('error-message');
+const openFolderBtn = document.getElementById('open-folder-btn') as HTMLButtonElement | null;
+const exportBtn = document.getElementById('export-btn') as HTMLButtonElement | null;
+
+// Validate required DOM elements
+function validateDOMElements(): boolean {
+  const requiredElements = [
+    statusIndicator, statusText, timerDisplay, timer, 
+    taskNote, recordBtn, recordBtnText, errorContainer, 
+    errorMessage, openFolderBtn, exportBtn
+  ];
+  
+  const allPresent = requiredElements.every(el => el !== null);
+  if (!allPresent) {
+    console.error('[Renderer] Required DOM elements not found');
+  }
+  return allPresent;
+}
 
 // Recording state
 let isRecording = false;
@@ -31,6 +56,11 @@ let mediaRecorder: MediaRecorder | null = null;
 let recordedChunks: Blob[] = [];
 let currentOutputPath: string | null = null;
 let mediaStream: MediaStream | null = null;
+
+// Cleanup functions for event listeners
+let cleanupStatusListener: (() => void) | null = null;
+let cleanupStartCapture: (() => void) | null = null;
+let cleanupStopCapture: (() => void) | null = null;
 
 // Format duration as HH:MM:SS
 function formatDuration(seconds: number): string {
@@ -44,6 +74,12 @@ function formatDuration(seconds: number): string {
 
 // Update UI based on system status
 function updateUI(status: SystemStatus): void {
+  if (!statusIndicator || !statusText || !recordBtn || !taskNote || 
+      !timerDisplay || !errorContainer || !recordBtnText || !timer) {
+    console.error('[Renderer] DOM elements not available for UI update');
+    return;
+  }
+  
   currentState = status.state;
 
   // Update status indicator
@@ -103,7 +139,9 @@ function updateUI(status: SystemStatus): void {
       taskNote.disabled = true;
       timerDisplay.classList.add('hidden');
       errorContainer.classList.remove('hidden');
-      errorMessage.textContent = status.error || 'An error occurred';
+      if (errorMessage) {
+        errorMessage.textContent = status.error || 'An error occurred';
+      }
       break;
   }
 }
@@ -139,7 +177,7 @@ async function startCapture(config: CaptureConfig): Promise<void> {
     // Create MediaRecorder with WebM format (will be converted to MP4 by main process)
     const options: MediaRecorderOptions = {
       mimeType: 'video/webm;codecs=vp9',
-      videoBitsPerSecond: 5000000, // 5 Mbps
+      videoBitsPerSecond: VIDEO_BITRATE,
     };
 
     // Fallback if VP9 not supported
@@ -154,7 +192,7 @@ async function startCapture(config: CaptureConfig): Promise<void> {
     
     mediaRecorder = new MediaRecorder(mediaStream, options);
 
-    mediaRecorder.ondataavailable = (event) => {
+    mediaRecorder.ondataavailable = (event: BlobEvent) => {
       if (event.data.size > 0) {
         recordedChunks.push(event.data);
       }
@@ -192,12 +230,12 @@ async function startCapture(config: CaptureConfig): Promise<void> {
       currentOutputPath = null;
     };
 
-    mediaRecorder.onerror = (event) => {
+    mediaRecorder.onerror = (event: Event) => {
       console.error('[Renderer] MediaRecorder error:', event);
     };
 
     // Start recording with 1 second chunks
-    mediaRecorder.start(1000);
+    mediaRecorder.start(CHUNK_INTERVAL_MS);
     console.log('[Renderer] Recording started');
     
   } catch (error) {
@@ -207,7 +245,7 @@ async function startCapture(config: CaptureConfig): Promise<void> {
 }
 
 /**
- * Stop the current capture
+ * Stop the current capture and clean up resources
  */
 function stopCapture(): void {
   console.log('[Renderer] Stopping capture...');
@@ -217,8 +255,23 @@ function stopCapture(): void {
   }
 }
 
+/**
+ * Clean up all media resources
+ */
+function cleanupMedia(): void {
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(track => track.stop());
+    mediaStream = null;
+  }
+  mediaRecorder = null;
+  recordedChunks = [];
+  currentOutputPath = null;
+}
+
 // Event Handlers
 async function handleRecordClick(): Promise<void> {
+  if (!recordBtn || !recordBtnText || !taskNote) return;
+  
   // Prevent double-clicks and clicks during invalid states
   if (recordBtn.disabled) return;
   if (currentState !== 'recording' && currentState !== 'idle') return;
@@ -271,6 +324,8 @@ async function handleRecordClick(): Promise<void> {
 }
 
 async function handleOpenFolder(): Promise<void> {
+  if (!openFolderBtn) return;
+  
   openFolderBtn.disabled = true;
 
   try {
@@ -283,6 +338,8 @@ async function handleOpenFolder(): Promise<void> {
 }
 
 async function handleExport(): Promise<void> {
+  if (!exportBtn) return;
+  
   exportBtn.disabled = true;
   const originalText = exportBtn.textContent;
   exportBtn.textContent = 'Exporting...';
@@ -309,31 +366,52 @@ async function handleExport(): Promise<void> {
   }
 }
 
+/**
+ * Clean up all event listeners
+ */
+function cleanup(): void {
+  cleanupStatusListener?.();
+  cleanupStartCapture?.();
+  cleanupStopCapture?.();
+  cleanupMedia();
+}
+
 // Initialize
 function init(): void {
-  // Set up event listeners
-  recordBtn.addEventListener('click', handleRecordClick);
-  openFolderBtn.addEventListener('click', handleOpenFolder);
-  exportBtn.addEventListener('click', handleExport);
+  // Validate DOM elements are present
+  if (!validateDOMElements()) {
+    console.error('[Renderer] Cannot initialize - missing DOM elements');
+    return;
+  }
 
-  // Listen for status updates from main process
-  window.electronAPI.onStatusUpdate((status: SystemStatus) => {
+  // Set up button event listeners
+  recordBtn?.addEventListener('click', handleRecordClick);
+  openFolderBtn?.addEventListener('click', handleOpenFolder);
+  exportBtn?.addEventListener('click', handleExport);
+
+  // Listen for status updates from main process (store cleanup functions)
+  cleanupStatusListener = window.electronAPI.onStatusUpdate((status: SystemStatus) => {
     updateUI(status);
   });
 
   // Listen for capture commands from main process
-  window.electronAPI.onStartCapture((config: CaptureConfig) => {
+  cleanupStartCapture = window.electronAPI.onStartCapture((config: CaptureConfig) => {
     startCapture(config).catch(error => {
       console.error('[Renderer] Capture failed:', error);
     });
   });
 
-  window.electronAPI.onStopCapture(() => {
+  cleanupStopCapture = window.electronAPI.onStopCapture(() => {
     stopCapture();
   });
 
+  // Clean up on page unload
+  window.addEventListener('beforeunload', cleanup);
+
   // Set initial state
   updateUI({ state: 'starting', message: 'Starting...' });
+  
+  console.log('[Renderer] Initialized successfully');
 }
 
 // Start the app

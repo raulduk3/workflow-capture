@@ -4,6 +4,7 @@ import * as os from 'os';
 import { shell } from 'electron';
 import archiver from 'archiver';
 import { createWriteStream } from 'fs';
+import { APP_CONSTANTS } from '../shared/types';
 
 export class FileManager {
   private readonly sessionsPath: string;
@@ -14,11 +15,10 @@ export class FileManager {
     if (platform === 'win32') {
       // Use AppData/Local for Windows - user-writable without admin permissions
       const appDataPath = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-      this.sessionsPath = path.join(appDataPath, 'L7SWorkflowCapture', 'Sessions');
-    } else if (platform === 'darwin') {
-      this.sessionsPath = path.join(os.homedir(), 'L7SWorkflowCapture', 'Sessions');
+      this.sessionsPath = path.join(appDataPath, APP_CONSTANTS.APP_NAME, APP_CONSTANTS.SESSIONS_FOLDER);
     } else {
-      this.sessionsPath = path.join(os.homedir(), 'L7SWorkflowCapture', 'Sessions');
+      // macOS and Linux use home directory
+      this.sessionsPath = path.join(os.homedir(), APP_CONSTANTS.APP_NAME, APP_CONSTANTS.SESSIONS_FOLDER);
     }
   }
 
@@ -47,8 +47,24 @@ export class FileManager {
     }
   }
 
+  /**
+   * Get date folder name in YYYY-MM-DD format
+   */
+  private getDateFolder(): string {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
   public async createSessionDirectory(sessionId: string): Promise<string> {
-    const sessionPath = path.join(this.sessionsPath, sessionId);
+    // Organize sessions by date for better archiving
+    // Structure: Sessions/YYYY-MM-DD/session-uuid/
+    const dateFolder = this.getDateFolder();
+    const datePath = path.join(this.sessionsPath, dateFolder);
+    const sessionPath = path.join(datePath, sessionId);
+    
     await fs.mkdir(sessionPath, { recursive: true });
     this.log(`Session directory created: ${sessionPath}`);
     return sessionPath;

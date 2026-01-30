@@ -1,19 +1,11 @@
 import { desktopCapturer, screen, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
+import { RecorderStatus, CaptureStoppedResult, APP_CONSTANTS } from '../shared/types';
 
 // Note: ffmpeg-static kept as dependency for future batch MP4 conversion utility
 
-// Note: ffmpeg-static kept as dependency for future batch MP4 conversion utility
-
-export interface RecorderStatus {
-  isRecording: boolean;
-  outputPath?: string;
-}
-
-interface CaptureStoppedResult {
-  success: boolean;
-  error?: string;
-}
+// Re-export types for backwards compatibility
+export type { RecorderStatus } from '../shared/types';
 
 /**
  * Native screen recorder using Electron's desktopCapturer API
@@ -163,7 +155,7 @@ export class NativeRecorder {
       const timeout = setTimeout(() => {
         this.captureStoppedResolver = null;
         reject(new Error('Timeout waiting for recording to stop'));
-      }, 30000);
+      }, APP_CONSTANTS.RECORDING_STOP_TIMEOUT_MS);
 
       // Set up resolver for capture-stopped event
       this.captureStoppedResolver = async (result: CaptureStoppedResult) => {
@@ -204,5 +196,38 @@ export class NativeRecorder {
    */
   public getRecordingStatus(): boolean {
     return this.isRecording;
+  }
+
+  /**
+   * Reset recorder state (for error recovery)
+   */
+  public reset(): void {
+    this.isRecording = false;
+    this.outputDir = null;
+    this.outputWebmPath = null;
+    this.captureStoppedResolver = null;
+    this.log('Recorder state reset');
+  }
+
+  /**
+   * Clean up resources when the app is closing
+   */
+  public dispose(): void {
+    // Reject any pending capture-stopped resolver to prevent memory leaks
+    if (this.captureStoppedResolver) {
+      this.captureStoppedResolver({ success: false, error: 'Recorder disposed' });
+      this.captureStoppedResolver = null;
+    }
+    
+    try {
+      ipcMain.removeHandler('capture-stopped');
+    } catch {
+      // Handler may already be removed, ignore error
+    }
+    
+    this.isRecording = false;
+    this.outputDir = null;
+    this.outputWebmPath = null;
+    this.log('Recorder disposed');
   }
 }
