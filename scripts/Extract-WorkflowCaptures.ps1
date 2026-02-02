@@ -25,7 +25,7 @@ param(
     [string]$DestinationPath = "\\Bulley-fs1\workflow",
     
     [Parameter(Mandatory=$false)]
-    [switch]$Verbose = $false
+    [switch]$VerboseOutput = $false
 )
 
 # Configuration

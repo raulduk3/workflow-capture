@@ -6,10 +6,17 @@
 #
 # Designed to be deployed via Ninja RMM for mass deployment
 #
+# Features:
+#   - Checks if already installed (skips download if so)
+#   - Kills all running instances before install/restart
+#   - Always enables auto-start at Windows login
+#   - Starts the application after installation
+#   - Provides detailed NinjaRMM summary output
+#
 # Usage:
 #   .\Install-WorkflowCapture.ps1                                    # Download from GitHub
 #   .\Install-WorkflowCapture.ps1 -InstallerSource "\\server\share"  # Use network share
-#   .\Install-WorkflowCapture.ps1 -AutoStart                         # Enable auto-start
+#   .\Install-WorkflowCapture.ps1 -Force                             # Force reinstall
 #
 # Exit Codes:
 #   0 - Success
@@ -32,10 +39,10 @@ param(
     [string]$InstallerFileName = "L7S-Workflow-Capture-1.0.7-x64.exe",
     
     [Parameter(Mandatory=$false)]
-    [switch]$AutoStart = $false,
+    [switch]$AllUsers = $false,
     
     [Parameter(Mandatory=$false)]
-    [switch]$AllUsers = $false
+    [switch]$Force = $false
 )
 
 # =============================================================================
@@ -127,7 +134,7 @@ function Get-InstallerFromSource {
     
     # Find the latest installer matching the pattern
     $installers = Get-ChildItem -Path $Source -Filter $InstallerFileName -File -ErrorAction SilentlyContinue |
-                  Sort-Object LastWriteTime -Descending
+                    Sort-Object LastWriteTime -Descending
     
     if (-not $installers) {
         Write-Log "No installer found matching pattern: $InstallerFileName" -Level "ERROR"
@@ -218,10 +225,10 @@ function Install-Application {
     
     try {
         $process = Start-Process -FilePath $InstallerPath `
-                                 -ArgumentList $arguments `
-                                 -Wait `
-                                 -PassThru `
-                                 -NoNewWindow
+                                    -ArgumentList $arguments `
+                                    -Wait `
+                                    -PassThru `
+                                    -NoNewWindow
         
         $exitCode = $process.ExitCode
         
@@ -272,6 +279,108 @@ function Remove-AutoStart {
     }
 }
 
+function Test-AlreadyInstalled {
+    # Check if the application is already installed
+    $possiblePaths = @(
+        "$InstallPath\Workflow Capture.exe",
+        "${env:ProgramFiles}\Workflow Capture\Workflow Capture.exe",
+        "${env:ProgramFiles(x86)}\Workflow Capture\Workflow Capture.exe"
+    )
+    
+    foreach ($path in $possiblePaths) {
+        if (Test-Path $path) {
+            return $path
+        }
+    }
+    
+    return $null
+}
+
+function Stop-RunningInstances {
+    Write-Log "Checking for running instances of Workflow Capture..."
+    
+    $processes = Get-Process -Name "Workflow Capture" -ErrorAction SilentlyContinue
+    
+    if ($processes) {
+        $count = ($processes | Measure-Object).Count
+        Write-Log "Found $count running instance(s) - terminating..."
+        
+        $processes | ForEach-Object {
+            try {
+                $_ | Stop-Process -Force
+                Write-Log "Terminated process ID: $($_.Id)"
+            } catch {
+                Write-Log "Failed to terminate process ID $($_.Id): $_" -Level "WARN"
+            }
+        }
+        
+        # Wait for processes to fully terminate
+        Start-Sleep -Seconds 2
+        Write-Log "All running instances terminated" -Level "SUCCESS"
+        return $count
+    } else {
+        Write-Log "No running instances found"
+        return 0
+    }
+}
+
+function Start-Application {
+    param([string]$ExePath)
+    
+    Write-Log "Starting $AppName..."
+    
+    try {
+        Start-Process -FilePath $ExePath -WindowStyle Normal
+        Start-Sleep -Seconds 2
+        
+        $process = Get-Process -Name "Workflow Capture" -ErrorAction SilentlyContinue
+        if ($process) {
+            Write-Log "$AppName started successfully (PID: $($process.Id))" -Level "SUCCESS"
+            return $true
+        } else {
+            Write-Log "Application started but process not detected" -Level "WARN"
+            return $false
+        }
+    } catch {
+        Write-Log "Failed to start application: $_" -Level "ERROR"
+        return $false
+    }
+}
+
+function Write-NinjaRMMMessage {
+    param(
+        [hashtable]$Result
+    )
+    
+    # Generate a clear summary message for NinjaRMM console
+    $message = @"
+================================================================================
+L7S WORKFLOW CAPTURE - DEPLOYMENT SUMMARY
+================================================================================
+Computer Name:      $($Result.ComputerName)
+Timestamp:          $($Result.Timestamp)
+Status:             $(if ($Result.Success) { "SUCCESS" } else { "FAILED" })
+--------------------------------------------------------------------------------
+ACTIONS PERFORMED:
+  - Already Installed:    $(if ($Result.WasAlreadyInstalled) { "Yes (skipped download)" } else { "No (fresh install)" })
+  - Instances Terminated: $($Result.InstancesTerminated)
+  - Installation:         $(if ($Result.InstallationPerformed) { "Completed" } else { "Skipped (already installed)" })
+  - Auto-Start:           Configured
+  - Application Started:  $(if ($Result.ApplicationStarted) { "Yes" } else { "No" })
+--------------------------------------------------------------------------------
+INSTALLATION DETAILS:
+  - Install Path:         $($Result.InstalledPath)
+  - Sessions Directory:   C:\temp\L7SWorkflowCapture\Sessions
+  - Log File:             $($Result.LogFile)
+================================================================================
+"@
+    
+    Write-Host $message
+    Write-Log "NinjaRMM summary message generated"
+    
+    return $message
+}
+
 function Test-Installation {
     # Wait a moment for installation to finalize
     Start-Sleep -Seconds 2
@@ -313,62 +422,107 @@ Write-Log "Computer: $env:COMPUTERNAME"
 Write-Log "User: $env:USERNAME"
 Write-Log "=========================================="
 
-# Get installer - Priority: URL > Source > GitHub
-$installerPath = $null
+# Initialize result object for NinjaRMM
+$result = @{
+    Success = $false
+    ComputerName = $env:COMPUTERNAME
+    InstalledPath = $null
+    WasAlreadyInstalled = $false
+    InstallationPerformed = $false
+    InstancesTerminated = 0
+    ApplicationStarted = $false
+    Timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    LogFile = $LogPath
+}
 
-if ($InstallerUrl) {
-    # Explicit URL provided
-    Write-Log "Using provided URL for installer"
-    $installerPath = Get-InstallerFromUrl -Url $InstallerUrl
-} elseif ($InstallerSource) {
-    # Network/local source provided
-    Write-Log "Using provided source path for installer"
-    $installerPath = Get-InstallerFromSource -Source $InstallerSource
+# Stop all running instances first
+$result.InstancesTerminated = Stop-RunningInstances
+
+# Check if already installed
+$existingInstallPath = Test-AlreadyInstalled
+
+if ($existingInstallPath -and -not $Force) {
+    Write-Log "Application already installed at: $existingInstallPath" -Level "SUCCESS"
+    Write-Log "Skipping download and installation (use -Force to reinstall)"
+    $result.WasAlreadyInstalled = $true
+    $result.InstalledPath = $existingInstallPath
+    $installedPath = $existingInstallPath
 } else {
-    # Default: Download specific release from GitHub
-    Write-Log "No installer source specified - downloading $ReleaseVersion from GitHub"
-    $installerPath = Get-InstallerFromGitHub
-}
+    if ($existingInstallPath -and $Force) {
+        Write-Log "Force reinstall requested - proceeding with installation"
+    }
+    
+    # Get installer - Priority: URL > Source > GitHub
+    $installerPath = $null
 
-if (-not $installerPath) {
-    Write-Log "Failed to obtain installer" -Level "ERROR"
-    exit 2
-}
+    if ($InstallerUrl) {
+        # Explicit URL provided
+        Write-Log "Using provided URL for installer"
+        $installerPath = Get-InstallerFromUrl -Url $InstallerUrl
+    } elseif ($InstallerSource) {
+        # Network/local source provided
+        Write-Log "Using provided source path for installer"
+        $installerPath = Get-InstallerFromSource -Source $InstallerSource
+    } else {
+        # Default: Download specific release from GitHub
+        Write-Log "No installer source specified - downloading $ReleaseVersion from GitHub"
+        $installerPath = Get-InstallerFromGitHub
+    }
 
-# Perform installation
-$installSuccess = Install-Application -InstallerPath $installerPath
+    if (-not $installerPath) {
+        Write-Log "Failed to obtain installer" -Level "ERROR"
+        $result.Success = $false
+        Write-NinjaRMMMessage -Result $result
+        exit 2
+    }
 
-if (-not $installSuccess) {
-    Remove-TempFiles
-    exit 3
-}
+    # Perform installation
+    $installSuccess = Install-Application -InstallerPath $installerPath
+    $result.InstallationPerformed = $true
 
-# Verify installation
-$installedPath = Test-Installation
+    if (-not $installSuccess) {
+        Remove-TempFiles
+        $result.Success = $false
+        Write-NinjaRMMMessage -Result $result
+        exit 3
+    }
 
-if (-not $installedPath) {
-    Write-Log "Installation verification failed" -Level "ERROR"
-    Remove-TempFiles
-    exit 3
+    # Verify installation
+    $installedPath = Test-Installation
+
+    if (-not $installedPath) {
+        Write-Log "Installation verification failed" -Level "ERROR"
+        Remove-TempFiles
+        $result.Success = $false
+        Write-NinjaRMMMessage -Result $result
+        exit 3
+    }
+    
+    $result.InstalledPath = $installedPath
 }
 
 # Initialize sessions directory with proper permissions for all users
 $sessionsInitialized = Initialize-SessionsDirectory
 if (-not $sessionsInitialized) {
     Write-Log "Warning: Sessions directory initialization failed - users may need to run as admin once" -Level "WARN"
-    exit 3
 }
 
-# Configure auto-start if requested
-if ($AutoStart) {
-    Set-AutoStart -ExePath $installedPath
-} else {
-    # Ensure no stale auto-start entries
-    Remove-AutoStart
-}
+# Always configure auto-start (no flag condition)
+Write-Log "Configuring auto-start (always enabled)..."
+Set-AutoStart -ExePath $installedPath
 
-# Cleanup
+# Cleanup temp files
 Remove-TempFiles
+
+# Start the application
+$appStarted = Start-Application -ExePath $installedPath
+$result.ApplicationStarted = $appStarted
+
+# Mark as success
+$result.Success = $true
+
+# Generate NinjaRMM summary message
+$ninjaMessage = Write-NinjaRMMMessage -Result $result
 
 # Summary
 Write-Log "=========================================="
@@ -376,17 +530,9 @@ Write-Log "Installation Complete" -Level "SUCCESS"
 Write-Log "=========================================="
 Write-Log "Application: $AppName"
 Write-Log "Location: $installedPath"
-Write-Log "Auto-Start: $(if ($AutoStart) { 'Enabled' } else { 'Disabled' })"
+Write-Log "Auto-Start: Always Enabled"
+Write-Log "App Running: $(if ($appStarted) { 'Yes' } else { 'No' })"
 Write-Log "Log File: $LogPath"
 Write-Log "=========================================="
-
-# Return success object for Ninja RMM
-$result = @{
-    Success = $true
-    ComputerName = $env:COMPUTERNAME
-    InstalledPath = $installedPath
-    AutoStart = $AutoStart.IsPresent
-    Timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-}
 
 return $result
