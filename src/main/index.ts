@@ -35,6 +35,23 @@ function log(message: string): void {
   console.log(`[Main] ${message}`);
 }
 
+/**
+ * Show and focus the main window, restoring it if minimized
+ */
+function showAndFocusWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  mainWindow.show();
+  mainWindow.focus();
+  log('Window shown and focused');
+}
+
 function sendStatus(status: SystemStatus): void {
   // Track current state for tray menu
   currentSystemState = status.state;
@@ -234,7 +251,7 @@ async function toggleRecording(): Promise<void> {
       sendRecordingSavedNotification(outputPath);
     }
   } else {
-    // Start recording with empty note (quick capture)
+    // Start recording with empty note (quick capture from tray/shortcut)
     try {
       const recordingPath = await sessionManager.startSession('');
       nativeRecorder.setOutputPath(recordingPath);
@@ -245,9 +262,6 @@ async function toggleRecording(): Promise<void> {
       updateTrayIcon();
       startRecordingTimer();
       sendStatus({ state: 'recording', message: 'Recording', recordingDuration: 0 });
-      
-      // Show window when recording starts (in case it was hidden)
-      mainWindow.show();
       
       log(`Recording started: ${recordingPath}`);
     } catch (error) {
@@ -326,6 +340,7 @@ function updateTrayIcon(): void {
 
 /**
  * Update the desktop RECORD shortcut icon based on recording state
+ * Uses Windows shell notification to force immediate icon refresh
  */
 function updateDesktopShortcutIcon(isRecording: boolean): void {
   // Only on Windows
@@ -352,9 +367,6 @@ function updateDesktopShortcutIcon(isRecording: boolean): void {
         : path.join(__dirname, '..', '..', 'build', 'icon.ico');
     }
     
-    // Get the exe path from current executable
-    const exePath = app.getPath('exe');
-    
     // Use Electron's shell.writeShortcutLink to update the shortcut
     const { shell } = require('electron');
     const shortcutDetails = shell.readShortcutLink(shortcutPath);
@@ -363,6 +375,21 @@ function updateDesktopShortcutIcon(isRecording: boolean): void {
       ...shortcutDetails,
       icon: iconPath,
       iconIndex: 0
+    });
+    
+    // Force Windows to refresh the desktop icon cache immediately
+    // Use ie4uinit which is the fastest method for icon refresh
+    const { exec } = require('child_process');
+    exec('ie4uinit.exe -show', { windowsHide: true }, (error: Error | null) => {
+      if (error) {
+        // Fallback: touch the shortcut file to trigger refresh
+        try {
+          const now = new Date();
+          fs.utimesSync(shortcutPath, now, now);
+        } catch (e) {
+          // Ignore
+        }
+      }
     });
     
     log(`Desktop shortcut icon updated: ${isRecording ? 'pause' : 'normal'}`);
@@ -387,8 +414,13 @@ function createTray(): void {
   
   tray.setToolTip('Workflow Capture');
   
-  // Click on tray icon - toggle recording (start or stop)
-  tray.on('click', async () => {
+  // Click on tray icon - show/restore the window (standard Windows behavior)
+  tray.on('click', () => {
+    showAndFocusWindow();
+  });
+  
+  // Double-click on tray icon - toggle recording
+  tray.on('double-click', async () => {
     await toggleRecording();
   });
   
@@ -525,8 +557,10 @@ function setupIpcHandlers(): void {
       startRecordingTimer();
       sendStatus({ state: 'recording', message: 'Recording', recordingDuration: 0 });
       
-      // Ensure window is visible when recording starts
-      mainWindow.show();
+      // Keep window visible during recording (user started from UI)
+      if (!mainWindow.isVisible()) {
+        mainWindow.show();
+      }
       
       log(`Recording started: ${recordingPath}`);
       return { success: true, sessionId: recordingPath };
@@ -647,27 +681,22 @@ if (!gotTheLock) {
   log('Another instance is running, signaling toggle and quitting');
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    log('Second instance detected');
+  app.on('second-instance', async () => {
+    log('Second instance detected (desktop shortcut clicked)');
     
     const isRecording = nativeRecorder?.getRecordingStatus() ?? false;
     
     if (isRecording) {
       // If recording, stop it
-      log('Stopping recording via desktop shortcut');
-      toggleRecording();
-    } else {
-      // If not recording, show window and focus text input for description
-      log('Showing window for new recording');
-      if (mainWindow) {
-        if (mainWindow.isMinimized()) {
-          mainWindow.restore();
-        }
-        mainWindow.show();
-        mainWindow.focus();
-        // Signal renderer to focus the task description input
-        mainWindow.webContents.send('focus-task-input');
-      }
+      await toggleRecording();
+    }
+    
+    // Always show and focus the window
+    showAndFocusWindow();
+    
+    // If not recording, signal renderer to focus the task description input
+    if (!isRecording && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('focus-task-input');
     }
   });
 
