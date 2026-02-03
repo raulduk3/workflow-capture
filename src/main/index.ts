@@ -75,8 +75,8 @@ function createWindow(): void {
     height: 320,
     resizable: false,
     maximizable: false,
-    skipTaskbar: true,
-    alwaysOnTop: true,
+    skipTaskbar: false,
+    alwaysOnTop: false,
     show: true,
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload.js'),
@@ -119,16 +119,21 @@ function createWindow(): void {
     log('Renderer became responsive again');
   });
 
-  // Prevent closing during recording - minimize instead
+  // Close behavior: minimize while recording (stays in taskbar), hide to tray when idle
   mainWindow.on('close', (event) => {
     if (!isQuitting) {
+      event.preventDefault();
+      
       const isRecording = nativeRecorder?.getRecordingStatus() ?? false;
       if (isRecording) {
-        // Don't close during recording, just minimize
-        event.preventDefault();
+        // While recording: minimize (stays visible in taskbar)
         mainWindow?.minimize();
+        log('Window minimized - recording continues, visible in taskbar');
+      } else {
+        // While idle: hide to tray
+        mainWindow?.hide();
+        log('Window hidden to tray');
       }
-      // Otherwise allow normal close
     }
   });
 
@@ -240,6 +245,9 @@ async function toggleRecording(): Promise<void> {
       updateTrayIcon();
       startRecordingTimer();
       sendStatus({ state: 'recording', message: 'Recording', recordingDuration: 0 });
+      
+      // Show window when recording starts (in case it was hidden)
+      mainWindow.show();
       
       log(`Recording started: ${recordingPath}`);
     } catch (error) {
@@ -517,6 +525,9 @@ function setupIpcHandlers(): void {
       startRecordingTimer();
       sendStatus({ state: 'recording', message: 'Recording', recordingDuration: 0 });
       
+      // Ensure window is visible when recording starts
+      mainWindow.show();
+      
       log(`Recording started: ${recordingPath}`);
       return { success: true, sessionId: recordingPath };
     } catch (error) {
@@ -637,9 +648,27 @@ if (!gotTheLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    log('Second instance detected - toggling recording');
-    // Toggle recording when desktop shortcut is clicked again
-    toggleRecording();
+    log('Second instance detected');
+    
+    const isRecording = nativeRecorder?.getRecordingStatus() ?? false;
+    
+    if (isRecording) {
+      // If recording, stop it
+      log('Stopping recording via desktop shortcut');
+      toggleRecording();
+    } else {
+      // If not recording, show window and focus text input for description
+      log('Showing window for new recording');
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) {
+          mainWindow.restore();
+        }
+        mainWindow.show();
+        mainWindow.focus();
+        // Signal renderer to focus the task description input
+        mainWindow.webContents.send('focus-task-input');
+      }
+    }
   });
 
   app.whenReady().then(async () => {

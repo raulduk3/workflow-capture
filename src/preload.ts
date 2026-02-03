@@ -21,6 +21,7 @@ export interface ElectronAPI {
   onStartCapture: (callback: (config: CaptureConfig) => void) => () => void;
   onStopCapture: (callback: () => void) => () => void;
   onRecordingSaved: (callback: (filename: string) => void) => () => void;
+  onFocusTaskInput: (callback: () => void) => () => void;
 }
 
 const electronAPI: ElectronAPI = {
@@ -64,6 +65,14 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.on('recording-saved', handler);
     return () => {
       ipcRenderer.removeListener('recording-saved', handler);
+    };
+  },
+  
+  onFocusTaskInput: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('focus-task-input', handler);
+    return () => {
+      ipcRenderer.removeListener('focus-task-input', handler);
     };
   },
 };

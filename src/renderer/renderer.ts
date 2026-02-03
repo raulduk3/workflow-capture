@@ -95,6 +95,7 @@ let cleanupStatusListener: (() => void) | null = null;
 let cleanupStartCapture: (() => void) | null = null;
 let cleanupStopCapture: (() => void) | null = null;
 let cleanupRecordingSaved: (() => void) | null = null;
+let cleanupFocusTaskInput: (() => void) | null = null;
 
 // Format duration as HH:MM:SS
 function formatDuration(seconds: number): string {
@@ -408,6 +409,7 @@ function cleanup(): void {
   cleanupStartCapture?.();
   cleanupStopCapture?.();
   cleanupRecordingSaved?.();
+  cleanupFocusTaskInput?.();
   cleanupMedia();
   if (toastTimeout) {
     clearTimeout(toastTimeout);
@@ -447,6 +449,14 @@ function init(): void {
   // Listen for recording saved notification
   cleanupRecordingSaved = window.electronAPI.onRecordingSaved((filename: string) => {
     showToast(`Recording saved as ${filename}`, 3000);
+  });
+
+  // Listen for focus task input signal (when app opened via desktop shortcut)
+  cleanupFocusTaskInput = window.electronAPI.onFocusTaskInput(() => {
+    if (taskNote && !taskNote.disabled) {
+      taskNote.focus();
+      taskNote.select();
+    }
   });
 
   // Clean up on page unload
