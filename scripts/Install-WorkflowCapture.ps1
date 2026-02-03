@@ -36,10 +36,9 @@ param(
     [string]$InstallerUrl = "",
     
     [Parameter(Mandatory=$false)]
-    [string]$InstallerFileName = "L7S-Workflow-Capture-1.0.7-x64.exe",
+    [string]$InstallerFileName = "L7S-Workflow-Capture-1.0.8-x64.exe",
     
-    [Parameter(Mandatory=$false)]
-    [switch]$AllUsers = $false,
+    [Parameter(Mandatory=$false)]    [switch]$AllUsers = $false,
     
     [Parameter(Mandatory=$false)]
     [switch]$Force = $false
@@ -51,7 +50,7 @@ param(
 
 $AppName = "L7S Workflow Capture"
 $AppPublisher = "Layer 7 Systems"
-$ReleaseVersion = "v1.0.7"
+$ReleaseVersion = "v1.0.8"
 $GitHubRepo = "raulduk3/workflow-capture"
 $GitHubReleaseUrl = "https://github.com/$GitHubRepo/releases/download/$ReleaseVersion/$InstallerFileName"
 $InstallPath = "$env:LOCALAPPDATA\Programs\l7s-workflow-capture"
@@ -269,6 +268,30 @@ function Set-AutoStart {
     }
 }
 
+function Set-DesktopShortcut {
+    param([string]$ExePath)
+    
+    Write-Log "Creating desktop shortcut..."
+    
+    $desktopPath = [Environment]::GetFolderPath("Desktop")
+    $shortcutPath = Join-Path $desktopPath "RECORD.lnk"
+    
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = $ExePath
+        $shortcut.WorkingDirectory = Split-Path $ExePath
+        $shortcut.Description = "L7S Workflow Capture - Click to Record"
+        $shortcut.Save()
+        
+        Write-Log "Desktop shortcut created: $shortcutPath" -Level "SUCCESS"
+        return $true
+    } catch {
+        Write-Log "Failed to create desktop shortcut: $_" -Level "WARN"
+        return $false
+    }
+}
+
 function Remove-AutoStart {
     $startupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
     $shortcutPath = Join-Path $startupPath "Workflow Capture.lnk"
@@ -277,6 +300,108 @@ function Remove-AutoStart {
         Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue
         Write-Log "Removed existing auto-start shortcut"
     }
+}
+
+function Uninstall-OldInstallations {
+    Write-Log "Checking for old installations to remove..."
+    
+    $uninstallPaths = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+    )
+    
+    $uninstalledCount = 0
+    
+    foreach ($regPath in $uninstallPaths) {
+        if (Test-Path $regPath) {
+            $apps = Get-ChildItem $regPath -ErrorAction SilentlyContinue
+            foreach ($app in $apps) {
+                $displayName = (Get-ItemProperty $app.PSPath -ErrorAction SilentlyContinue).DisplayName
+                $uninstallString = (Get-ItemProperty $app.PSPath -ErrorAction SilentlyContinue).UninstallString
+                
+                if ($displayName -like "*Workflow Capture*" -or $displayName -like "*L7S*Workflow*") {
+                    Write-Log "Found old installation: $displayName"
+                    
+                    if ($uninstallString) {
+                        try {
+                            # Handle NSIS uninstaller (add /S for silent)
+                            if ($uninstallString -match '"([^"]+)"') {
+                                $uninstallerPath = $matches[1]
+                            } else {
+                                $uninstallerPath = $uninstallString.Split(' ')[0]
+                            }
+                            
+                            if (Test-Path $uninstallerPath) {
+                                Write-Log "Running uninstaller: $uninstallerPath /S"
+                                $process = Start-Process -FilePath $uninstallerPath -ArgumentList "/S" -Wait -PassThru -NoNewWindow
+                                if ($process.ExitCode -eq 0) {
+                                    Write-Log "Successfully uninstalled: $displayName" -Level "SUCCESS"
+                                    $uninstalledCount++
+                                } else {
+                                    Write-Log "Uninstaller exited with code: $($process.ExitCode)" -Level "WARN"
+                                }
+                            }
+                        } catch {
+                            Write-Log "Failed to run uninstaller for $displayName: $_" -Level "WARN"
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    # Also remove old installation directories manually
+    $oldInstallDirs = @(
+        "$env:LOCALAPPDATA\Programs\l7s-workflow-capture",
+        "$env:LOCALAPPDATA\Programs\workflow-capture",
+        "${env:ProgramFiles}\Workflow Capture",
+        "${env:ProgramFiles(x86)}\Workflow Capture",
+        "${env:ProgramFiles}\L7S Workflow Capture",
+        "${env:ProgramFiles(x86)}\L7S Workflow Capture"
+    )
+    
+    foreach ($dir in $oldInstallDirs) {
+        if (Test-Path $dir) {
+            try {
+                # Don't remove if this is where we're installing to
+                if ($dir -ne $InstallPath) {
+                    Write-Log "Removing old installation directory: $dir"
+                    Remove-Item -Path $dir -Recurse -Force -ErrorAction Stop
+                    Write-Log "Removed directory: $dir" -Level "SUCCESS"
+                }
+            } catch {
+                Write-Log "Failed to remove directory $dir: $_" -Level "WARN"
+            }
+        }
+    }
+    
+    # Remove old desktop shortcuts
+    $desktopPath = [Environment]::GetFolderPath("Desktop")
+    $oldShortcuts = @(
+        (Join-Path $desktopPath "Workflow Capture.lnk"),
+        (Join-Path $desktopPath "L7S Workflow Capture.lnk")
+    )
+    
+    foreach ($shortcut in $oldShortcuts) {
+        if (Test-Path $shortcut) {
+            Remove-Item $shortcut -Force -ErrorAction SilentlyContinue
+            Write-Log "Removed old shortcut: $shortcut"
+        }
+    }
+    
+    # Remove old auto-start entries
+    Remove-AutoStart
+    
+    if ($uninstalledCount -gt 0) {
+        Write-Log "Uninstalled $uninstalledCount old installation(s)" -Level "SUCCESS"
+        # Wait for uninstallation to complete
+        Start-Sleep -Seconds 3
+    } else {
+        Write-Log "No old installations found to remove"
+    }
+    
+    return $uninstalledCount
 }
 
 function Test-AlreadyInstalled {
@@ -329,6 +454,33 @@ function Start-Application {
     
     Write-Log "Starting $AppName..."
     
+    # Check if already running - reuse existing instance instead of starting new one
+    $existingProcess = Get-Process -Name "Workflow Capture" -ErrorAction SilentlyContinue
+    if ($existingProcess) {
+        $processCount = ($existingProcess | Measure-Object).Count
+        if ($processCount -eq 1) {
+            Write-Log "$AppName is already running (PID: $($existingProcess.Id)) - reusing existing instance" -Level "SUCCESS"
+            return $true
+        } elseif ($processCount -gt 1) {
+            # Multiple instances running - kill all but the first one
+            Write-Log "Multiple instances detected ($processCount) - keeping only the first one" -Level "WARN"
+            $existingProcess | Select-Object -Skip 1 | ForEach-Object {
+                try {
+                    $_ | Stop-Process -Force
+                    Write-Log "Terminated duplicate instance (PID: $($_.Id))"
+                } catch {
+                    Write-Log "Failed to terminate duplicate instance: $_" -Level "WARN"
+                }
+            }
+            $remainingProcess = Get-Process -Name "Workflow Capture" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($remainingProcess) {
+                Write-Log "$AppName running with single instance (PID: $($remainingProcess.Id))" -Level "SUCCESS"
+                return $true
+            }
+        }
+    }
+    
+    # No instance running - start a new one
     try {
         Start-Process -FilePath $ExePath -WindowStyle Normal
         Start-Sleep -Seconds 2
@@ -438,6 +590,10 @@ $result = @{
 # Stop all running instances first
 $result.InstancesTerminated = Stop-RunningInstances
 
+# Uninstall any old installations
+$uninstalledCount = Uninstall-OldInstallations
+Write-Log "Removed $uninstalledCount old installation(s)"
+
 # Check if already installed
 $existingInstallPath = Test-AlreadyInstalled
 
@@ -510,6 +666,10 @@ if (-not $sessionsInitialized) {
 # Always configure auto-start (no flag condition)
 Write-Log "Configuring auto-start (always enabled)..."
 Set-AutoStart -ExePath $installedPath
+
+# Create desktop RECORD shortcut
+Write-Log "Creating desktop RECORD shortcut..."
+Set-DesktopShortcut -ExePath $installedPath
 
 # Cleanup temp files
 Remove-TempFiles

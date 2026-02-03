@@ -28,6 +28,8 @@ let recordingStartTime: number | null = null;
 let recordingTimer: NodeJS.Timeout | null = null;
 let maxDurationTimer: NodeJS.Timeout | null = null;
 let isQuitting = false;
+let normalTrayIcon: Electron.NativeImage | null = null;
+let pauseTrayIcon: Electron.NativeImage | null = null;
 
 function log(message: string): void {
   console.log(`[Main] ${message}`);
@@ -117,11 +119,16 @@ function createWindow(): void {
     log('Renderer became responsive again');
   });
 
-  // Hide to tray instead of closing
+  // Prevent closing during recording - minimize instead
   mainWindow.on('close', (event) => {
     if (!isQuitting) {
-      event.preventDefault();
-      mainWindow?.hide();
+      const isRecording = nativeRecorder?.getRecordingStatus() ?? false;
+      if (isRecording) {
+        // Don't close during recording, just minimize
+        event.preventDefault();
+        mainWindow?.minimize();
+      }
+      // Otherwise allow normal close
     }
   });
 
@@ -143,41 +150,10 @@ function updateTrayMenu(): void {
   
   const contextMenu = Menu.buildFromTemplate([
     { 
-      label: isProcessing ? 'Saving...' : (isRecording ? 'Stop Recording' : 'Show Window'),
+      label: isProcessing ? 'Saving...' : (isRecording ? 'Stop Recording' : 'Start Recording'),
       enabled: !isProcessing, // Disable menu item while processing
       click: async () => {
-        if (isRecording && !isProcessing && nativeRecorder && mainWindow) {
-          // Stop recording - do all work while window is still hidden
-          let outputPath: string | null = null;
-          try {
-            stopRecordingTimer();
-            currentSystemState = 'processing';
-            updateTrayMenu();
-            
-            outputPath = await nativeRecorder.stopRecording(mainWindow);
-            await sessionManager?.endCurrentSession();
-            
-            log(`Recording stopped via tray menu, saved to: ${outputPath}`);
-          } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-            log(`Failed to stop recording via tray menu: ${errorMessage}`);
-          }
-          
-          // Now show window in idle state
-          currentSystemState = 'idle';
-          updateTrayMenu();
-          mainWindow.show();
-          mainWindow.focus();
-          sendStatus({ state: 'idle', message: 'Ready' });
-          
-          // Show toast notification with saved filename
-          if (outputPath) {
-            sendRecordingSavedNotification(outputPath);
-          }
-        } else if (mainWindow) {
-          mainWindow.show();
-          mainWindow.focus();
-        }
+        await toggleRecording();
       }
     },
     { 
@@ -202,32 +178,98 @@ function updateTrayMenu(): void {
     ? 'Workflow Capture - Saving...'
     : isRecording 
       ? 'Workflow Capture - Recording (Click to stop)' 
-      : 'Workflow Capture';
+      : 'Workflow Capture (Click to start recording)';
   tray.setToolTip(tooltip);
   tray.setContextMenu(contextMenu);
 }
 
-function createTray(): void {
-  // Use the app icon for the tray
+/**
+ * Toggle recording state - start if idle, stop if recording
+ * Called by tray icon click and tray menu
+ */
+async function toggleRecording(): Promise<void> {
+  const isRecording = nativeRecorder?.getRecordingStatus() ?? false;
+  const isProcessing = currentSystemState === 'processing';
+  
+  if (isProcessing) {
+    // Currently saving, ignore
+    return;
+  }
+  
+  if (!nativeRecorder || !mainWindow || !sessionManager) {
+    log('Cannot toggle recording: system not initialized');
+    return;
+  }
+  
+  if (isRecording) {
+    // Stop recording
+    let outputPath: string | null = null;
+    try {
+      stopRecordingTimer();
+      currentSystemState = 'processing';
+      updateTrayMenu();
+      updateTrayIcon();
+      sendStatus({ state: 'processing', message: 'Saving...' });
+      
+      outputPath = await nativeRecorder.stopRecording(mainWindow);
+      await sessionManager.endCurrentSession();
+      
+      log(`Recording stopped, saved to: ${outputPath}`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      log(`Failed to stop recording: ${errorMessage}`);
+    }
+    
+    currentSystemState = 'idle';
+    updateTrayMenu();
+    updateTrayIcon();
+    sendStatus({ state: 'idle', message: 'Ready' });
+    
+    if (outputPath) {
+      sendRecordingSavedNotification(outputPath);
+    }
+  } else {
+    // Start recording with empty note (quick capture)
+    try {
+      const recordingPath = await sessionManager.startSession('');
+      nativeRecorder.setOutputPath(recordingPath);
+      await nativeRecorder.startRecording(mainWindow);
+      
+      currentSystemState = 'recording';
+      updateTrayMenu();
+      updateTrayIcon();
+      startRecordingTimer();
+      sendStatus({ state: 'recording', message: 'Recording', recordingDuration: 0 });
+      
+      log(`Recording started: ${recordingPath}`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      log(`Failed to start recording: ${errorMessage}`);
+      sendStatus({ state: 'error', message: 'Failed to start recording', error: errorMessage });
+    }
+  }
+}
+
+function loadTrayIcons(): void {
+  // Load normal icon
   let iconPath: string;
+  let pauseIconPath: string;
   
   if (app.isPackaged) {
     // In packaged app, use resources directory
     iconPath = path.join(process.resourcesPath, 'icon.ico');
+    pauseIconPath = path.join(process.resourcesPath, 'icon-pause.ico');
   } else {
     // In development, use build directory
     iconPath = path.join(__dirname, '..', '..', 'build', 'icon.ico');
+    pauseIconPath = path.join(__dirname, '..', '..', 'build', 'icon-pause.ico');
   }
   
-  let trayIcon: Electron.NativeImage;
-  
-  // Check if icon file exists
+  // Load normal icon
   if (fs.existsSync(iconPath)) {
-    trayIcon = nativeImage.createFromPath(iconPath);
-    // Resize for tray (16x16 on Windows, varies on other platforms)
-    trayIcon = trayIcon.resize({ width: 16, height: 16 });
+    normalTrayIcon = nativeImage.createFromPath(iconPath);
+    normalTrayIcon = normalTrayIcon.resize({ width: 16, height: 16 });
   } else {
-    // Fallback: create a simple icon programmatically
     log(`Icon not found at ${iconPath}, using fallback`);
     const size = 16;
     const canvas = Buffer.alloc(size * size * 4);
@@ -237,56 +279,109 @@ function createTray(): void {
       canvas[i * 4 + 2] = 255; // B
       canvas[i * 4 + 3] = 255; // A
     }
-    trayIcon = nativeImage.createFromBuffer(canvas, { width: size, height: size });
+    normalTrayIcon = nativeImage.createFromBuffer(canvas, { width: size, height: size });
   }
   
-  tray = new Tray(trayIcon);
+  // Load pause icon
+  if (fs.existsSync(pauseIconPath)) {
+    pauseTrayIcon = nativeImage.createFromPath(pauseIconPath);
+    pauseTrayIcon = pauseTrayIcon.resize({ width: 16, height: 16 });
+  } else {
+    log(`Pause icon not found at ${pauseIconPath}, using fallback`);
+    // Fallback: create a red icon for recording state
+    const size = 16;
+    const canvas = Buffer.alloc(size * size * 4);
+    for (let i = 0; i < size * size; i++) {
+      canvas[i * 4] = 255;     // R
+      canvas[i * 4 + 1] = 68;  // G  
+      canvas[i * 4 + 2] = 68;  // B
+      canvas[i * 4 + 3] = 255; // A
+    }
+    pauseTrayIcon = nativeImage.createFromBuffer(canvas, { width: size, height: size });
+  }
+}
+
+function updateTrayIcon(): void {
+  if (!tray) return;
+  
+  const isRecording = nativeRecorder?.getRecordingStatus() ?? false;
+  
+  if (isRecording && pauseTrayIcon) {
+    tray.setImage(pauseTrayIcon);
+  } else if (normalTrayIcon) {
+    tray.setImage(normalTrayIcon);
+  }
+  
+  // Also update desktop shortcut icon
+  updateDesktopShortcutIcon(isRecording);
+}
+
+/**
+ * Update the desktop RECORD shortcut icon based on recording state
+ */
+function updateDesktopShortcutIcon(isRecording: boolean): void {
+  // Only on Windows
+  if (process.platform !== 'win32') return;
+  
+  try {
+    const desktopPath = app.getPath('desktop');
+    const shortcutPath = path.join(desktopPath, 'RECORD.lnk');
+    
+    // Check if shortcut exists
+    if (!fs.existsSync(shortcutPath)) {
+      return;
+    }
+    
+    // Determine which icon to use
+    let iconPath: string;
+    if (app.isPackaged) {
+      iconPath = isRecording 
+        ? path.join(process.resourcesPath, 'icon-pause.ico')
+        : path.join(process.resourcesPath, 'icon.ico');
+    } else {
+      iconPath = isRecording
+        ? path.join(__dirname, '..', '..', 'build', 'icon-pause.ico')
+        : path.join(__dirname, '..', '..', 'build', 'icon.ico');
+    }
+    
+    // Get the exe path from current executable
+    const exePath = app.getPath('exe');
+    
+    // Use Electron's shell.writeShortcutLink to update the shortcut
+    const { shell } = require('electron');
+    const shortcutDetails = shell.readShortcutLink(shortcutPath);
+    
+    shell.writeShortcutLink(shortcutPath, 'update', {
+      ...shortcutDetails,
+      icon: iconPath,
+      iconIndex: 0
+    });
+    
+    log(`Desktop shortcut icon updated: ${isRecording ? 'pause' : 'normal'}`);
+  } catch (error) {
+    // Silently fail - shortcut icon update is not critical
+    log(`Failed to update desktop shortcut icon: ${error}`);
+  }
+}
+
+function createTray(): void {
+  // Load both icons
+  loadTrayIcons();
+  
+  if (!normalTrayIcon) {
+    log('Failed to load tray icon');
+    return;
+  }
+  
+  tray = new Tray(normalTrayIcon);
   
   updateTrayMenu();
   
   tray.setToolTip('Workflow Capture');
   
-  // Click on tray icon - if recording, stop recording; otherwise toggle window
+  // Click on tray icon - toggle recording (start or stop)
   tray.on('click', async () => {
-    const isRecording = nativeRecorder?.getRecordingStatus() ?? false;
-    const isProcessing = currentSystemState === 'processing';
-    
-    if (isRecording && !isProcessing && nativeRecorder && mainWindow) {
-      // Stop recording - do all work while window is still hidden
-      let outputPath: string | null = null;
-      try {
-        stopRecordingTimer();
-        currentSystemState = 'processing';
-        updateTrayMenu();
-        
-        outputPath = await nativeRecorder.stopRecording(mainWindow);
-        await sessionManager?.endCurrentSession();
-        
-        log(`Recording stopped via tray, saved to: ${outputPath}`);
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        log(`Failed to stop recording via tray: ${errorMessage}`);
-      }
-      
-      // Now show window in idle state
-      currentSystemState = 'idle';
-      updateTrayMenu();
-      mainWindow.show();
-      mainWindow.focus();
-      sendStatus({ state: 'idle', message: 'Ready' });
-      
-      // Show toast notification with saved filename
-      if (outputPath) {
-        sendRecordingSavedNotification(outputPath);
-      }
-    } else if (mainWindow) {
-      if (mainWindow.isVisible()) {
-        mainWindow.hide();
-      } else {
-        mainWindow.show();
-        mainWindow.focus();
-      }
-    }
+    await toggleRecording();
   });
   
   log('Tray created');
@@ -369,6 +464,7 @@ async function autoStopRecording(): Promise<void> {
     stopRecordingTimer();
     currentSystemState = 'processing';
     updateTrayMenu();
+    updateTrayIcon();
     
     // Show window immediately with processing state
     mainWindow.show();
@@ -382,6 +478,7 @@ async function autoStopRecording(): Promise<void> {
     
     currentSystemState = 'idle';
     updateTrayMenu();
+    updateTrayIcon();
     sendStatus({ state: 'idle', message: 'Ready' });
     
     // Show toast notification with saved filename
@@ -391,6 +488,7 @@ async function autoStopRecording(): Promise<void> {
     log(`Failed to auto-stop recording: ${errorMessage}`);
     currentSystemState = 'idle';
     updateTrayMenu();
+    updateTrayIcon();
     sendStatus({ state: 'idle', message: 'Ready' });
   }
 }
@@ -411,11 +509,10 @@ function setupIpcHandlers(): void {
       // Start recording
       await nativeRecorder.startRecording(mainWindow);
       
-      // Hide window during recording
-      mainWindow.hide();
-      
-      // Update tray to show recording state
+      // Update tray to show recording state with pause icon
+      currentSystemState = 'recording';
       updateTrayMenu();
+      updateTrayIcon();
       
       startRecordingTimer();
       sendStatus({ state: 'recording', message: 'Recording', recordingDuration: 0 });
@@ -438,16 +535,18 @@ function setupIpcHandlers(): void {
       // Stop the timer immediately so user sees feedback
       stopRecordingTimer();
       
-      // Show window immediately with processing state
-      mainWindow.show();
-      mainWindow.focus();
-      sendStatus({ state: 'processing', message: 'Processing video...' });
-      
-      // Update tray to show we're no longer recording
+      // Update UI to processing state
+      currentSystemState = 'processing';
       updateTrayMenu();
+      updateTrayIcon();
+      sendStatus({ state: 'processing', message: 'Processing video...' });
 
       // Process recording (conversion happens in background while UI is responsive)
       const outputPath = await nativeRecorder.stopRecording(mainWindow);
+      
+      currentSystemState = 'idle';
+      updateTrayMenu();
+      updateTrayIcon();
       
       sessionManager.endCurrentSession();
       sendStatus({ state: 'idle', message: 'Ready' });
@@ -461,9 +560,11 @@ function setupIpcHandlers(): void {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       log(`Failed to stop recording: ${errorMessage}`);
       // Reset to idle state on error so user can try again
+      currentSystemState = 'idle';
       sendStatus({ state: 'idle', message: 'Ready' });
       // Update tray to show idle state
       updateTrayMenu();
+      updateTrayIcon();
       return { success: false, error: errorMessage };
     }
   });
@@ -532,16 +633,13 @@ function setupIpcHandlers(): void {
 const gotTheLock = app.requestSingleInstanceLock();
 
 if (!gotTheLock) {
-  log('Another instance is running, quitting');
+  log('Another instance is running, signaling toggle and quitting');
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) {
-        mainWindow.restore();
-      }
-      mainWindow.focus();
-    }
+    log('Second instance detected - toggling recording');
+    // Toggle recording when desktop shortcut is clicked again
+    toggleRecording();
   });
 
   app.whenReady().then(async () => {
