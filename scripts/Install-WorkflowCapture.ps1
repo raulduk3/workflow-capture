@@ -258,6 +258,7 @@ function Set-AutoStart {
         $shortcut.TargetPath = $ExePath
         $shortcut.WorkingDirectory = Split-Path $ExePath
         $shortcut.Description = "L7S Workflow Capture - Screen Recording Tool"
+        $shortcut.IconLocation = "$ExePath,0"
         $shortcut.Save()
         
         Write-Log "Auto-start shortcut created: $shortcutPath" -Level "SUCCESS"
@@ -286,6 +287,8 @@ function Set-DesktopShortcut {
         $shortcut.TargetPath = $ExePath
         $shortcut.WorkingDirectory = Split-Path $ExePath
         $shortcut.Description = "L7S Workflow Capture - Click to Record"
+        # Set the icon from the exe itself (index 0 is the first icon)
+        $shortcut.IconLocation = "$ExePath,0"
         $shortcut.Save()
         
         Write-Log "Desktop shortcut created: $shortcutPath" -Level "SUCCESS"
