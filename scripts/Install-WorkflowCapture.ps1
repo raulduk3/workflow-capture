@@ -273,8 +273,12 @@ function Set-DesktopShortcut {
     
     Write-Log "Creating desktop shortcut..."
     
-    $desktopPath = [Environment]::GetFolderPath("Desktop")
+    # Use Public Desktop so all users can see the shortcut
+    # This works correctly when running as SYSTEM via RMM
+    $desktopPath = [Environment]::GetFolderPath("CommonDesktopDirectory")
     $shortcutPath = Join-Path $desktopPath "RECORD.lnk"
+    
+    Write-Log "Desktop path: $desktopPath"
     
     try {
         $shell = New-Object -ComObject WScript.Shell
