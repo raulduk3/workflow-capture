@@ -36,7 +36,7 @@ param(
     [string]$InstallerUrl = "",
     
     [Parameter(Mandatory=$false)]
-    [string]$InstallerFileName = "L7S-Workflow-Capture-1.0.8-x64.exe",
+    [string]$InstallerFileName = "L7S-Workflow-Capture-1.0.9-x64.exe",
     
     [Parameter(Mandatory=$false)]    [switch]$AllUsers = $false,
     
@@ -343,7 +343,7 @@ function Uninstall-OldInstallations {
                                 }
                             }
                         } catch {
-                            Write-Log "Failed to run uninstaller for $displayName: $_" -Level "WARN"
+                            Write-Log "Failed to run uninstaller for ${displayName}: $_" -Level "WARN"
                         }
                     }
                 }
@@ -371,7 +371,7 @@ function Uninstall-OldInstallations {
                     Write-Log "Removed directory: $dir" -Level "SUCCESS"
                 }
             } catch {
-                Write-Log "Failed to remove directory $dir: $_" -Level "WARN"
+                Write-Log "Failed to remove directory ${dir}: $_" -Level "WARN"
             }
         }
     }
