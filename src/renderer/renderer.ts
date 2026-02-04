@@ -314,22 +314,30 @@ async function startCapture(config: CaptureConfig): Promise<void> {
         
         // Combine all chunks into a single blob
         const blob = new Blob(recordedChunks, { type: 'video/webm' });
-        console.log(`[Renderer] Created blob: ${blob.size} bytes`);
+        const blobSizeMB = (blob.size / 1024 / 1024).toFixed(2);
+        console.log(`[Renderer] Created blob: ${blob.size} bytes (${blobSizeMB} MB)`);
         
         if (blob.size === 0) {
           throw new Error('Recording blob is empty');
         }
         
+        console.log('[Renderer] Converting blob to ArrayBuffer...');
         const arrayBuffer = await blob.arrayBuffer();
-        console.log(`[Renderer] ArrayBuffer size: ${arrayBuffer.byteLength} bytes`);
+        console.log(`[Renderer] ArrayBuffer ready: ${arrayBuffer.byteLength} bytes`);
         
-        // Save the file via IPC
-        await window.electronAPI.saveRecordingData(arrayBuffer, currentOutputPath!);
+        // Save the file via IPC with timeout
+        console.log('[Renderer] Sending to main process for save...');
+        const saveResult = await window.electronAPI.saveRecordingData(arrayBuffer, currentOutputPath!);
+        
+        if (!saveResult.success) {
+          throw new Error(saveResult.error || 'Failed to save file');
+        }
         
         console.log('[Renderer] Recording saved successfully');
         
         // Notify main process that capture is complete
         await window.electronAPI.notifyCaptureStopped({ success: true });
+        console.log('[Renderer] Main process notified');
       } catch (error) {
         console.error('[Renderer] Failed to save recording:', error);
         await window.electronAPI.notifyCaptureStopped({ 

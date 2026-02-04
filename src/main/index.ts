@@ -730,12 +730,17 @@ function setupIpcHandlers(): void {
   // Note: export-sessions handler removed - extraction handled by RMM script directly
 
   // Handle recording data from renderer
+  // Note: For large recordings, this can receive hundreds of MB of data
   ipcMain.handle('save-recording-chunk', async (_event, chunk: ArrayBuffer, outputPath: string) => {
     try {
-      fs.appendFileSync(outputPath, Buffer.from(chunk));
+      log(`Saving recording to ${outputPath} (${(chunk.byteLength / 1024 / 1024).toFixed(2)} MB)`);
+      // Use writeFile instead of appendFile since we receive the complete recording
+      fs.writeFileSync(outputPath, Buffer.from(chunk));
+      log(`Recording saved successfully`);
       return { success: true };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      log(`Failed to save recording: ${errorMessage}`);
       return { success: false, error: errorMessage };
     }
   });
