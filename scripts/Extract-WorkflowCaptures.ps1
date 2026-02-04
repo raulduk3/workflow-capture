@@ -5,7 +5,7 @@
 # and copies them to a designated network share.
 #
 # Designed to be deployed via Ninja RMM for silent background extraction
-# Runs 2-3 times per day - automatically deletes local recordings after upload
+# Runs 2-3 times per day - archives local recordings after upload (not deleted)
 #
 # IMPORTANT: Must run as the logged-in user (not SYSTEM) to access network share
 # In Ninja RMM: Set "Run As" to "Logged-in User" or "Current User"
@@ -13,6 +13,10 @@
 # Data Structure (Local):
 #   C:\temp\L7SWorkflowCapture\Sessions\
 #   └── YYYY-MM-DD_HHMMSS_machineName_taskDescription.webm
+#
+# Archive Structure (Local - NOT uploaded):
+#   C:\temp\L7SWorkflowCapture\Archive\
+#   └── recordings_YYYY-MM-DD_HHMMSS_machineName.zip
 #
 # Data Structure (Network Destination):
 #   \\server\share\
@@ -22,7 +26,7 @@
 
 param(
     [Parameter(Mandatory=$false)]
-    [string]$DestinationPath = "\\Bulley-fs1\workflow",
+    [string]$DestinationPath = "\\bulley-fs1\workflow",
     
     [Parameter(Mandatory=$false)]
     [switch]$VerboseOutput = $false
@@ -31,6 +35,7 @@ param(
 # Configuration
 $AppName = "L7SWorkflowCapture"
 $SessionsFolder = "Sessions"
+$ArchiveFolder = "Archive"
 $BasePath = "C:\temp"
 
 function Write-Log {
@@ -42,6 +47,57 @@ function Write-Log {
 function Get-SessionsPath {
     # User-agnostic path - all sessions stored in C:\temp
     return Join-Path $BasePath "$AppName\$SessionsFolder"
+}
+
+function Get-ArchivePath {
+    # Archive folder - separate from Sessions so it won't get picked up
+    return Join-Path $BasePath "$AppName\$ArchiveFolder"
+}
+
+function Archive-Recordings {
+    param(
+        [string[]]$FilesToArchive
+    )
+    
+    if ($FilesToArchive.Count -eq 0) {
+        return
+    }
+    
+    $archivePath = Get-ArchivePath
+    
+    # Create archive folder if it doesn't exist
+    if (-not (Test-Path $archivePath)) {
+        New-Item -ItemType Directory -Path $archivePath -Force | Out-Null
+        Write-Log "Created archive folder: $archivePath"
+    }
+    
+    # Create zip filename with timestamp
+    $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
+    $zipName = "recordings_${timestamp}_$env:COMPUTERNAME.zip"
+    $zipPath = Join-Path $archivePath $zipName
+    
+    Write-Log "Archiving $($FilesToArchive.Count) recording(s) to: $zipName"
+    
+    try {
+        # Create the zip archive
+        Compress-Archive -Path $FilesToArchive -DestinationPath $zipPath -Force
+        Write-Log "Archive created: $zipPath"
+        
+        # Remove original files after successful archive
+        foreach ($file in $FilesToArchive) {
+            try {
+                Remove-Item -Path $file -Force
+                Write-Log "Removed original: $(Split-Path $file -Leaf)"
+            } catch {
+                Write-Log "WARNING: Could not remove $file`: $_"
+            }
+        }
+        
+        return $zipPath
+    } catch {
+        Write-Log "ERROR: Failed to create archive: $_"
+        return $null
+    }
 }
 
 function Copy-Recordings {
@@ -66,8 +122,22 @@ function Copy-Recordings {
         return $null
     }
     
-    $totalSize = ($recordings | Measure-Object -Property Length -Sum).Sum
-    Write-Log "Found $($recordings.Count) recording(s) ($('{0:N2}' -f ($totalSize / 1MB)) MB)"
+    # Filter out files that might be actively recording (modified in last 2 minutes)
+    $cutoffTime = (Get-Date).AddMinutes(-2)
+    $safeRecordings = $recordings | Where-Object { $_.LastWriteTime -lt $cutoffTime }
+    $skippedCount = $recordings.Count - $safeRecordings.Count
+    
+    if ($skippedCount -gt 0) {
+        Write-Log "Skipping $skippedCount file(s) that may be actively recording (modified < 2 min ago)"
+    }
+    
+    if (-not $safeRecordings -or $safeRecordings.Count -eq 0) {
+        Write-Log "No safe recordings to process (all may be in active use)"
+        return $null
+    }
+    
+    $totalSize = ($safeRecordings | Measure-Object -Property Length -Sum).Sum
+    Write-Log "Found $($safeRecordings.Count) recording(s) ready for extraction ($('{0:N2}' -f ($totalSize / 1MB)) MB)"
     
     # Create destination folder using USERNAME
     $userFolder = Join-Path $DestinationBase $env:USERNAME
@@ -80,7 +150,7 @@ function Copy-Recordings {
     $copiedCount = 0
     $copiedFiles = @()
     
-    foreach ($recording in $recordings) {
+    foreach ($recording in $safeRecordings) {
         $destPath = Join-Path $userFolder $recording.Name
         
         try {
@@ -93,23 +163,18 @@ function Copy-Recordings {
         }
     }
     
-    # Delete successfully copied files
+    # Archive successfully copied files (zip and move to archive folder)
+    $archivePath = $null
     if ($copiedFiles.Count -gt 0) {
-        Write-Log "Cleaning up $($copiedFiles.Count) copied recording(s)..."
-        foreach ($file in $copiedFiles) {
-            try {
-                Remove-Item -Path $file -Force
-                Write-Log "Deleted: $(Split-Path $file -Leaf)"
-            } catch {
-                Write-Log "WARNING: Could not delete $file`: $_"
-            }
-        }
+        Write-Log "Archiving $($copiedFiles.Count) copied recording(s)..."
+        $archivePath = Archive-Recordings -FilesToArchive $copiedFiles
     }
     
     return @{
         Recordings = $copiedCount
         SizeMB = [math]::Round($totalSize / 1MB, 2)
         Destination = $userFolder
+        ArchivePath = $archivePath
     }
 }
 
@@ -130,8 +195,9 @@ Write-Log "L7S Workflow Capture - Data Extraction"
 Write-Log "Running as: $currentUser"
 Write-Log "Username: $env:USERNAME"
 Write-Log "Source: $(Get-SessionsPath)"
+Write-Log "Archive: $(Get-ArchivePath)"
 Write-Log "Destination: $DestinationPath\$env:USERNAME"
-Write-Log "Note: Local recordings will be deleted after upload"
+Write-Log "Note: Local recordings will be zipped and archived after upload"
 Write-Log "=========================================="
 
 # Validate destination
@@ -152,7 +218,9 @@ if ($result) {
     Write-Log "Total recordings copied: $($result.Recordings)"
     Write-Log "Total data size: $('{0:N2}' -f $result.SizeMB) MB"
     Write-Log "Destination: $($result.Destination)"
-    Write-Log "Local recordings cleaned up: Yes"
+    if ($result.ArchivePath) {
+        Write-Log "Archived to: $($result.ArchivePath)"
+    }
 } else {
     Write-Log "No new workflow capture recordings found on this machine"
 }
