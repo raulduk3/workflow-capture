@@ -543,6 +543,7 @@ function startRecordingTimer(): void {
   
   // Set up max duration timer - auto-stop after configured duration
   const maxDurationMs = getMaxRecordingDurationMs();
+  log(`Setting up max duration timer: ${maxDurationMs}ms (${runtimeConfig.maxRecordingMinutes} minutes)`);
   maxDurationTimer = setTimeout(async () => {
     log(`Max recording duration (${runtimeConfig.maxRecordingMinutes} minutes) reached, auto-stopping...`);
     await autoStopRecording();
