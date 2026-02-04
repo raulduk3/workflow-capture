@@ -37,7 +37,7 @@ interface CaptureConfig {
 }
 
 // Constants
-const VIDEO_BITRATE = 5_000_000; // 5 Mbps
+const VIDEO_BITRATE = 8_000_000; // 8 Mbps - Higher bitrate for readable text
 const CHUNK_INTERVAL_MS = 1000;
 
 // DOM Elements - use assertion after null check

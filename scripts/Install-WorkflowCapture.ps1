@@ -49,10 +49,10 @@ param(
     
     # Configuration options (deployed to config.json)
     [Parameter(Mandatory=$false)]
-    [int]$MaxRecordingMinutes = 1,
+    [int]$MaxRecordingMinutes = 5,
         
     [Parameter(Mandatory=$false)]
-    [int]$VideoBitrateMbps = 5
+    [int]$VideoBitrateMbps = 8
 )
 
 # =============================================================================
