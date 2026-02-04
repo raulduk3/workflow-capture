@@ -21,7 +21,7 @@
 #   .\Install-WorkflowCapture.ps1 -MaxRecordingMinutes 10            # Set 10 min limit
 #
 # Configuration Options:
-#   -MaxRecordingMinutes <int>  : Max recording duration (default: 5)
+#   -MaxRecordingMinutes <int>  : Max recording duration (default: 10)
 #   -VideoBitrateMbps <int>     : Video quality bitrate (default: 5)
 #
 # Exit Codes:
