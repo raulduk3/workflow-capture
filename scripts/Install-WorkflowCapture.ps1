@@ -51,9 +51,9 @@ param(
     [Parameter(Mandatory=$false)]
     [int]$MaxRecordingMinutes = 5,
         
-    # Higher bitrate for OCR/video-to-text analysis - ensures text is readable
+    # 5 Mbps provides good text readability while working on all hardware
     [Parameter(Mandatory=$false)]
-    [int]$VideoBitrateMbps = 12
+    [int]$VideoBitrateMbps = 8
 )
 
 # =============================================================================

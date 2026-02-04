@@ -36,9 +36,9 @@ interface CaptureConfig {
   displayInfo?: DisplayInfo[];
 }
 
-// Constants - Optimized for OCR/video-to-text analysis
-// Higher bitrate ensures text remains sharp and readable for AI models
-const VIDEO_BITRATE = 12_000_000; // 12 Mbps - High quality for text recognition
+// Constants - Balanced for quality and compatibility
+// 5 Mbps provides good text readability while working on low-end hardware
+const VIDEO_BITRATE = 5_000_000; // 5 Mbps - Good quality, compatible with all hardware
 const CHUNK_INTERVAL_MS = 1000;
 
 // DOM Elements - use assertion after null check
@@ -269,16 +269,20 @@ async function startCapture(config: CaptureConfig): Promise<void> {
     }
 
     // Create MediaRecorder with WebM format
+    // Use VP8 first - it has much better software encoding performance than VP9
+    // VP9 requires dedicated hardware encoder or it's very slow
     const options: MediaRecorderOptions = {
-      mimeType: 'video/webm;codecs=vp9',
+      mimeType: 'video/webm;codecs=vp8',
       videoBitsPerSecond: VIDEO_BITRATE,
     };
 
-    // Fallback if VP9 not supported
+    // Fallback codecs
     if (!MediaRecorder.isTypeSupported(options.mimeType!)) {
-      options.mimeType = 'video/webm;codecs=vp8';
+      console.log('[Renderer] VP8 not supported, trying VP9');
+      options.mimeType = 'video/webm;codecs=vp9';
     }
     if (!MediaRecorder.isTypeSupported(options.mimeType!)) {
+      console.log('[Renderer] VP9 not supported, using default WebM');
       options.mimeType = 'video/webm';
     }
 
@@ -294,6 +298,7 @@ async function startCapture(config: CaptureConfig): Promise<void> {
 
     mediaRecorder.onstop = async () => {
       console.log('[Renderer] MediaRecorder stopped, saving file...');
+      console.log(`[Renderer] Recorded chunks: ${recordedChunks.length}, total size: ${recordedChunks.reduce((acc, chunk) => acc + chunk.size, 0)} bytes`);
       
       // Stop compositing animation loop if active
       if (animationFrameId !== null) {
@@ -302,9 +307,21 @@ async function startCapture(config: CaptureConfig): Promise<void> {
       }
       
       try {
+        // Check if we have any data
+        if (recordedChunks.length === 0) {
+          throw new Error('No video data was recorded');
+        }
+        
         // Combine all chunks into a single blob
         const blob = new Blob(recordedChunks, { type: 'video/webm' });
+        console.log(`[Renderer] Created blob: ${blob.size} bytes`);
+        
+        if (blob.size === 0) {
+          throw new Error('Recording blob is empty');
+        }
+        
         const arrayBuffer = await blob.arrayBuffer();
+        console.log(`[Renderer] ArrayBuffer size: ${arrayBuffer.byteLength} bytes`);
         
         // Save the file via IPC
         await window.electronAPI.saveRecordingData(arrayBuffer, currentOutputPath!);
