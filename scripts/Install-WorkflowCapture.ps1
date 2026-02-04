@@ -51,8 +51,9 @@ param(
     [Parameter(Mandatory=$false)]
     [int]$MaxRecordingMinutes = 5,
         
+    # Higher bitrate for OCR/video-to-text analysis - ensures text is readable
     [Parameter(Mandatory=$false)]
-    [int]$VideoBitrateMbps = 8
+    [int]$VideoBitrateMbps = 12
 )
 
 # =============================================================================
@@ -61,7 +62,7 @@ param(
 
 $AppName = "L7S Workflow Capture"
 $AppPublisher = "Layer 7 Systems"
-$ReleaseVersion = "v1.1.7"
+$ReleaseVersion = "v1.1.7"  
 $GitHubRepo = "raulduk3/workflow-capture"
 $GitHubReleaseUrl = "https://github.com/$GitHubRepo/releases/download/$ReleaseVersion/$InstallerFileName"
 $InstallPath = "${env:ProgramFiles}\Workflow Capture"

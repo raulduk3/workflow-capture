@@ -36,8 +36,9 @@ interface CaptureConfig {
   displayInfo?: DisplayInfo[];
 }
 
-// Constants
-const VIDEO_BITRATE = 8_000_000; // 8 Mbps - Higher bitrate for readable text
+// Constants - Optimized for OCR/video-to-text analysis
+// Higher bitrate ensures text remains sharp and readable for AI models
+const VIDEO_BITRATE = 12_000_000; // 12 Mbps - High quality for text recognition
 const CHUNK_INTERVAL_MS = 1000;
 
 // DOM Elements - use assertion after null check
