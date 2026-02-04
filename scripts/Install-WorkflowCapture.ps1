@@ -48,7 +48,7 @@ param(
 
 $AppName = "L7S Workflow Capture"
 $AppPublisher = "Layer 7 Systems"
-$ReleaseVersion = "v1.1.3"
+$ReleaseVersion = "v1.1.4"
 $GitHubRepo = "raulduk3/workflow-capture"
 $GitHubReleaseUrl = "https://github.com/$GitHubRepo/releases/download/$ReleaseVersion/$InstallerFileName"
 $InstallPath = "${env:ProgramFiles}\Workflow Capture"
