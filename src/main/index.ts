@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import { NativeRecorder } from './native-recorder';
 import { SessionManager } from './session-manager';
 import { FileManager } from './file-manager';
-import { SystemState, SystemStatus, APP_CONSTANTS } from '../shared/types';
+import { SystemState, SystemStatus, APP_CONSTANTS, ExternalConfig, CONFIG_DEFAULTS } from '../shared/types';
 
 // Global error handlers
 process.on('uncaughtException', (error) => {
@@ -17,6 +17,58 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // Re-export types from shared for backwards compatibility
 export type { SystemState, SystemStatus } from '../shared/types';
+
+// Runtime configuration (loaded from config.json or defaults)
+let runtimeConfig: Required<ExternalConfig> = { ...CONFIG_DEFAULTS };
+
+/**
+ * Load external configuration from config.json
+ * Config file location: C:\temp\L7SWorkflowCapture\config.json (Windows)
+ * This allows changing settings across clients without reinstalling
+ */
+function loadExternalConfig(): void {
+  const basePath = process.platform === 'win32' ? 'C:\\temp' : '/tmp';
+  const configPath = path.join(basePath, APP_CONSTANTS.APP_NAME, APP_CONSTANTS.CONFIG_FILENAME);
+  
+  try {
+    if (fs.existsSync(configPath)) {
+      const configData = fs.readFileSync(configPath, 'utf-8');
+      const externalConfig: ExternalConfig = JSON.parse(configData);
+      
+      // Merge with defaults, validating values
+      if (typeof externalConfig.maxRecordingMinutes === 'number' && externalConfig.maxRecordingMinutes > 0) {
+        runtimeConfig.maxRecordingMinutes = externalConfig.maxRecordingMinutes;
+      }
+      if (typeof externalConfig.videoBitrateMbps === 'number' && externalConfig.videoBitrateMbps > 0) {
+        runtimeConfig.videoBitrateMbps = externalConfig.videoBitrateMbps;
+      }
+      
+      log(`Loaded external config from ${configPath}:`);
+      log(`  - Max recording: ${runtimeConfig.maxRecordingMinutes} minutes`);
+      log(`  - Video bitrate: ${runtimeConfig.videoBitrateMbps} Mbps`);
+    } else {
+      log(`No external config found at ${configPath}, using defaults`);
+      log(`  - Max recording: ${runtimeConfig.maxRecordingMinutes} minutes`);
+    }
+  } catch (error) {
+    log(`Warning: Failed to load config from ${configPath}: ${error}`);
+    log(`Using default configuration`);
+  }
+}
+
+/**
+ * Get the max recording duration in milliseconds (from config or default)
+ */
+function getMaxRecordingDurationMs(): number {
+  return runtimeConfig.maxRecordingMinutes * 60 * 1000;
+}
+
+/**
+ * Get the video bitrate in bits per second (from config or default)
+ */
+function getVideoBitrate(): number {
+  return runtimeConfig.videoBitrateMbps * 1_000_000;
+}
 
 // Globals
 let mainWindow: BrowserWindow | null = null;
@@ -474,11 +526,12 @@ function startRecordingTimer(): void {
     }
   }, APP_CONSTANTS.TIMER_INTERVAL_MS);
   
-  // Set up max duration timer - auto-stop after 5 minutes
+  // Set up max duration timer - auto-stop after configured duration
+  const maxDurationMs = getMaxRecordingDurationMs();
   maxDurationTimer = setTimeout(async () => {
-    log('Max recording duration (5 minutes) reached, auto-stopping...');
+    log(`Max recording duration (${runtimeConfig.maxRecordingMinutes} minutes) reached, auto-stopping...`);
     await autoStopRecording();
-  }, APP_CONSTANTS.MAX_RECORDING_DURATION_MS);
+  }, maxDurationMs);
 }
 
 function stopRecordingTimer(): void {
@@ -716,6 +769,9 @@ if (!gotTheLock) {
 
   app.whenReady().then(async () => {
     log('App ready');
+    
+    // Load external configuration first (allows remote config changes without reinstall)
+    loadExternalConfig();
     
     setupIpcHandlers();
     createWindow();

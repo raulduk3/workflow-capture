@@ -56,9 +56,23 @@ export interface RecorderStatus {
   outputPath?: string;
 }
 
+/** External configuration file structure (config.json) */
+export interface ExternalConfig {
+  /** Maximum recording duration in minutes (default: 5) */
+  maxRecordingMinutes?: number;
+  /** Video bitrate in Mbps (default: 5) */
+  videoBitrateMbps?: number;
+}
+
+/** Default values for external config */
+export const CONFIG_DEFAULTS: Required<ExternalConfig> = {
+  maxRecordingMinutes: 5,
+  videoBitrateMbps: 5,
+};
+
 /** Application constants */
 export const APP_CONSTANTS = {
-  /** Maximum recording duration in milliseconds (5 minutes) */
+  /** Maximum recording duration in milliseconds (5 minutes) - DEFAULT, can be overridden by config.json */
   MAX_RECORDING_DURATION_MS: 5 * 60 * 1000,
   
   /** Application name used for file paths */
@@ -67,12 +81,15 @@ export const APP_CONSTANTS = {
   /** Sessions folder name */
   SESSIONS_FOLDER: 'Sessions',
   
+  /** Config filename */
+  CONFIG_FILENAME: 'config.json',
+  
   /** Recording timeout for stop operation (30 seconds) */
   RECORDING_STOP_TIMEOUT_MS: 30000,
   
   /** Timer update interval (1 second) */
   TIMER_INTERVAL_MS: 1000,
   
-  /** Video bitrate in bits per second (5 Mbps) */
+  /** Video bitrate in bits per second (5 Mbps) - DEFAULT, can be overridden by config.json */
   VIDEO_BITRATE: 5_000_000,
 } as const;
