@@ -29,10 +29,10 @@ win:
 
 nsis:
   oneClick: true
-  perMachine: false
-  allowElevation: false
-  runAfterFinish: true
-  createDesktopShortcut: true
+  perMachine: true
+  allowElevation: true
+  runAfterFinish: false
+  createDesktopShortcut: false
   createStartMenuShortcut: true
   shortcutName: Workflow Capture
   include: installer/nsis-include.nsh

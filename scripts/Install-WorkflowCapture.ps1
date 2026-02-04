@@ -36,9 +36,7 @@ param(
     [string]$InstallerUrl = "",
     
     [Parameter(Mandatory=$false)]
-    [string]$InstallerFileName = "L7S-Workflow-Capture-1.0.9-x64.exe",
-    
-    [Parameter(Mandatory=$false)]    [switch]$AllUsers = $false,
+    [string]$InstallerFileName = "L7S-Workflow-Capture-1.1.0-x64.exe",
     
     [Parameter(Mandatory=$false)]
     [switch]$Force = $false
@@ -50,12 +48,19 @@ param(
 
 $AppName = "L7S Workflow Capture"
 $AppPublisher = "Layer 7 Systems"
-$ReleaseVersion = "v1.0.9"
+$ReleaseVersion = "v1.1.0"
 $GitHubRepo = "raulduk3/workflow-capture"
 $GitHubReleaseUrl = "https://github.com/$GitHubRepo/releases/download/$ReleaseVersion/$InstallerFileName"
-$InstallPath = "$env:LOCALAPPDATA\Programs\l7s-workflow-capture"
-$LogPath = "$env:TEMP\L7S-WorkflowCapture-Install.log"
-$TempInstallerPath = "$env:TEMP\L7S-Workflow-Capture-Setup.exe"
+$InstallPath = "${env:ProgramFiles}\Workflow Capture"
+
+# Use C:\temp instead of %TEMP% to avoid issues when running as SYSTEM
+# SYSTEM's temp folder (C:\WINDOWS\TEMP) causes NSIS installers to crash
+$TempDir = "C:\temp\L7SWorkflowCapture"
+if (-not (Test-Path $TempDir)) {
+    New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
+}
+$LogPath = "$TempDir\L7S-WorkflowCapture-Install.log"
+$TempInstallerPath = "$TempDir\L7S-Workflow-Capture-Setup.exe"
 
 # =============================================================================
 # Functions
@@ -81,6 +86,41 @@ function Write-Log {
     
     # Append to log file
     Add-Content -Path $LogPath -Value $logMessage -ErrorAction SilentlyContinue
+}
+
+function Get-ExePath {
+    # Helper function to search for Workflow Capture.exe
+    # Returns the full path if found, $null otherwise
+    param([string]$SearchPath, [bool]$Recursive = $false)
+    
+    if (-not (Test-Path $SearchPath)) {
+        return $null
+    }
+    
+    if ($Recursive) {
+        $foundExe = Get-ChildItem -Path $SearchPath -Filter "Workflow Capture.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($foundExe) {
+            return $foundExe.FullName
+        }
+    } else {
+        $exePath = Join-Path $SearchPath "Workflow Capture.exe"
+        if (Test-Path $exePath) {
+            return $exePath
+        }
+    }
+    
+    return $null
+}
+
+function Get-ProcessCount {
+    # Helper function to safely get process count
+    param([string]$ProcessName)
+    
+    $processes = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue
+    if ($processes) {
+        return ($processes | Measure-Object).Count
+    }
+    return 0
 }
 
 function Initialize-SessionsDirectory {
@@ -121,50 +161,33 @@ function Initialize-SessionsDirectory {
 }
 
 
-function Get-InstallerFromSource {
-    param([string]$Source)
+function Get-Installer {
+    # Get installer from URL, Source, or GitHub (in priority order)
+    param(
+        [string]$Url = "",
+        [string]$Source = "",
+        [string]$FileName = $InstallerFileName
+    )
     
-    Write-Log "Looking for installer in: $Source"
-    
-    if (-not (Test-Path $Source)) {
-        Write-Log "Source path does not exist: $Source" -Level "ERROR"
-        return $null
+    if ($Url) {
+        Write-Log "Downloading installer from provided URL"
+        return Get-InstallerFromUrl -Url $Url
     }
     
-    # Find the latest installer matching the pattern
-    $installers = Get-ChildItem -Path $Source -Filter $InstallerFileName -File -ErrorAction SilentlyContinue |
-                    Sort-Object LastWriteTime -Descending
-    
-    if (-not $installers) {
-        Write-Log "No installer found matching pattern: $InstallerFileName" -Level "ERROR"
-        return $null
+    if ($Source) {
+        Write-Log "Getting installer from provided source path"
+        return Get-InstallerFromSource -Source $Source -FileName $FileName
     }
     
-    $latestInstaller = $installers[0]
-    Write-Log "Found installer: $($latestInstaller.Name) ($('{0:N2}' -f ($latestInstaller.Length / 1MB)) MB)"
-    
-    # Copy to temp location
-    Write-Log "Copying installer to temp location..."
-    try {
-        Copy-Item -Path $latestInstaller.FullName -Destination $TempInstallerPath -Force
-        Write-Log "Installer copied successfully"
-        return $TempInstallerPath
-    } catch {
-        Write-Log "Failed to copy installer: $_" -Level "ERROR"
-        return $null
-    }
+    Write-Log "Downloading release $ReleaseVersion from GitHub: $GitHubRepo"
+    return Get-InstallerFromGitHub
 }
 
 function Get-InstallerFromUrl {
     param([string]$Url)
     
-    Write-Log "Downloading installer from: $Url"
-    
     try {
-        # Configure TLS 1.2
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        
-        # Download with progress
         $webClient = New-Object System.Net.WebClient
         $webClient.DownloadFile($Url, $TempInstallerPath)
         
@@ -180,14 +203,42 @@ function Get-InstallerFromUrl {
     return $null
 }
 
-function Get-InstallerFromGitHub {
-    Write-Log "Downloading release $ReleaseVersion from GitHub: $GitHubRepo"
+function Get-InstallerFromSource {
+    param([string]$Source, [string]$FileName)
+    
+    Write-Log "Looking for installer in: $Source"
+    
+    if (-not (Test-Path $Source)) {
+        Write-Log "Source path does not exist: $Source" -Level "ERROR"
+        return $null
+    }
+    
+    $installers = Get-ChildItem -Path $Source -Filter $FileName -File -ErrorAction SilentlyContinue |
+                    Sort-Object LastWriteTime -Descending
+    
+    if (-not $installers) {
+        Write-Log "No installer found matching pattern: $FileName" -Level "ERROR"
+        return $null
+    }
+    
+    $latestInstaller = $installers[0]
+    Write-Log "Found installer: $($latestInstaller.Name) ($('{0:N2}' -f ($latestInstaller.Length / 1MB)) MB)"
     
     try {
-        # Configure TLS 1.2
+        Copy-Item -Path $latestInstaller.FullName -Destination $TempInstallerPath -Force
+        Write-Log "Installer copied successfully"
+        return $TempInstallerPath
+    } catch {
+        Write-Log "Failed to copy installer: $_" -Level "ERROR"
+        return $null
+    }
+}
+
+function Get-InstallerFromGitHub {
+    try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        
         Write-Log "Download URL: $GitHubReleaseUrl"
+        
         $webClient = New-Object System.Net.WebClient
         $webClient.Headers.Add("User-Agent", "L7S-Workflow-Capture-Installer")
         $webClient.DownloadFile($GitHubReleaseUrl, $TempInstallerPath)
@@ -209,22 +260,20 @@ function Install-Application {
     
     Write-Log "Starting silent installation..."
     
-    # NSIS installer arguments for silent install
     # /S = Silent mode
-    # /D = Installation directory (must be last parameter, no quotes)
-    # /NCRC = Skip CRC check (optional, for faster install)
-    $arguments = @("/S")
+    # /D = Installation directory (must be last parameter, no quotes around path)
+    # Note: /D must be the LAST parameter and path must NOT be quoted
+    $targetDir = "C:\Program Files\Workflow Capture"
     
-    if ($AllUsers) {
-        # Install for all users (requires admin)
-        $arguments += "/ALLUSERS"
-    }
+    # Build argument string - /D= must be last and path unquoted
+    $argumentString = "/S /D=$targetDir"
     
-    Write-Log "Installer arguments: $($arguments -join ' ')"
+    Write-Log "Installer arguments: $argumentString"
+    Write-Log "Target directory: $targetDir"
     
     try {
         $process = Start-Process -FilePath $InstallerPath `
-                                    -ArgumentList $arguments `
+                                    -ArgumentList $argumentString `
                                     -Wait `
                                     -PassThru `
                                     -NoNewWindow
@@ -233,6 +282,8 @@ function Install-Application {
         
         if ($exitCode -eq 0) {
             Write-Log "Installation completed successfully" -Level "SUCCESS"
+            # Give the installer a moment to finalize file operations
+            Start-Sleep -Seconds 3
             return $true
         } else {
             Write-Log "Installation failed with exit code: $exitCode" -Level "ERROR"
@@ -247,65 +298,190 @@ function Install-Application {
 function Set-AutoStart {
     param([string]$ExePath)
     
-    Write-Log "Configuring auto-start..."
+    Write-Log "Configuring auto-start for all users (machine-wide only)..."
     
-    $startupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
-    $shortcutPath = Join-Path $startupPath "Workflow Capture.lnk"
+    $successCount = 0
     
+    # Method 1: Use Common Startup folder (applies to ALL users)
+    # This is a machine-wide location that works reliably when running as SYSTEM
+    $commonStartup = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
+    if (-not (Test-Path $commonStartup)) {
+        try {
+            New-Item -ItemType Directory -Path $commonStartup -Force | Out-Null
+        } catch {
+            Write-Log "Failed to create common startup folder: $_" -Level "WARN"
+        }
+    }
+    
+    $commonShortcutPath = Join-Path $commonStartup "Workflow Capture.lnk"
     try {
+        # Remove existing shortcut first to avoid stale references
+        if (Test-Path $commonShortcutPath) {
+            Remove-Item $commonShortcutPath -Force -ErrorAction SilentlyContinue
+        }
+        
         $shell = New-Object -ComObject WScript.Shell
-        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut = $shell.CreateShortcut($commonShortcutPath)
         $shortcut.TargetPath = $ExePath
         $shortcut.WorkingDirectory = Split-Path $ExePath
         $shortcut.Description = "L7S Workflow Capture - Screen Recording Tool"
         $shortcut.IconLocation = "$ExePath,0"
         $shortcut.Save()
         
-        Write-Log "Auto-start shortcut created: $shortcutPath" -Level "SUCCESS"
-        return $true
+        Write-Log "Auto-start shortcut created in Common Startup: $commonShortcutPath" -Level "SUCCESS"
+        $successCount++
     } catch {
-        Write-Log "Failed to create auto-start shortcut: $_" -Level "WARN"
+        Write-Log "Failed to create common startup shortcut: $_" -Level "WARN"
+    }
+    
+    # Method 2: Also add to registry for all users (backup method)
+    # HKLM Run works reliably when running as SYSTEM
+    try {
+        $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+        Set-ItemProperty -Path $regPath -Name "WorkflowCapture" -Value "`"$ExePath`"" -Force
+        Write-Log "Auto-start registry entry created: HKLM\...\Run\WorkflowCapture" -Level "SUCCESS"
+        $successCount++
+    } catch {
+        Write-Log "Failed to create registry auto-start entry: $_" -Level "WARN"
+    }
+    
+    if ($successCount -eq 0) {
+        Write-Log "Failed to configure any auto-start method" -Level "ERROR"
         return $false
     }
+    
+    Write-Log "Configured $successCount auto-start method(s)" -Level "SUCCESS"
+    return $true
 }
 
 function Set-DesktopShortcut {
     param([string]$ExePath)
     
-    Write-Log "Creating desktop shortcut..."
+    Write-Log "Creating desktop shortcut for all users (Public Desktop only)..."
     
-    # Use Public Desktop so all users can see the shortcut
-    # This works correctly when running as SYSTEM via RMM
-    $desktopPath = [Environment]::GetFolderPath("CommonDesktopDirectory")
-    $shortcutPath = Join-Path $desktopPath "RECORD.lnk"
+    # Use ONLY Public Desktop - this appears on ALL user desktops and avoids
+    # permission issues when running as SYSTEM with logged-in users
+    # Individual user profile desktops may be inaccessible, redirected (OneDrive), or locked
+    $publicDesktop = "C:\Users\Public\Desktop"
     
-    Write-Log "Desktop path: $desktopPath"
+    if (-not (Test-Path $publicDesktop)) {
+        Write-Log "Public Desktop not found, creating: $publicDesktop" -Level "WARN"
+        try {
+            New-Item -ItemType Directory -Path $publicDesktop -Force | Out-Null
+        } catch {
+            Write-Log "Failed to create Public Desktop: $_" -Level "ERROR"
+            return $false
+        }
+    }
+    
+    $shortcutPath = Join-Path $publicDesktop "Workflow Capture.lnk"
+    Write-Log "Creating shortcut at Public Desktop: $shortcutPath"
     
     try {
+        # Remove existing shortcut first to avoid stale references
+        if (Test-Path $shortcutPath) {
+            Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue
+        }
+        
         $shell = New-Object -ComObject WScript.Shell
         $shortcut = $shell.CreateShortcut($shortcutPath)
         $shortcut.TargetPath = $ExePath
         $shortcut.WorkingDirectory = Split-Path $ExePath
         $shortcut.Description = "L7S Workflow Capture - Click to Record"
-        # Set the icon from the exe itself (index 0 is the first icon)
         $shortcut.IconLocation = "$ExePath,0"
         $shortcut.Save()
         
-        Write-Log "Desktop shortcut created: $shortcutPath" -Level "SUCCESS"
+        Write-Log "Desktop shortcut created on Public Desktop: $shortcutPath" -Level "SUCCESS"
         return $true
     } catch {
-        Write-Log "Failed to create desktop shortcut: $_" -Level "WARN"
+        Write-Log "Failed to create Public Desktop shortcut: $_" -Level "ERROR"
         return $false
     }
 }
 
-function Remove-AutoStart {
-    $startupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
-    $shortcutPath = Join-Path $startupPath "Workflow Capture.lnk"
+function Remove-BrokenShortcuts {
+    # Find and remove any shortcuts pointing to non-existent executables
+    Write-Log "Checking for broken shortcuts pointing to old installations..."
     
-    if (Test-Path $shortcutPath) {
-        Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue
-        Write-Log "Removed existing auto-start shortcut"
+    $shortcutLocations = @(
+        "C:\Users\Public\Desktop",
+        "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
+    )
+    
+    # Add all user desktops and startup folders
+    $userProfiles = Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue | 
+        Where-Object { $_.Name -notin @("Public", "Default", "Default User", "All Users") }
+    foreach ($profile in $userProfiles) {
+        $shortcutLocations += "$($profile.FullName)\Desktop"
+        $shortcutLocations += "$($profile.FullName)\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
+    }
+    
+    $shortcutNames = @("Workflow Capture.lnk", "L7S Workflow Capture.lnk", "RECORD.lnk")
+    $removedCount = 0
+    
+    foreach ($location in $shortcutLocations) {
+        if (-not (Test-Path $location)) { continue }
+        
+        foreach ($name in $shortcutNames) {
+            $shortcutPath = Join-Path $location $name
+            if (Test-Path $shortcutPath) {
+                try {
+                    $shell = New-Object -ComObject WScript.Shell
+                    $shortcut = $shell.CreateShortcut($shortcutPath)
+                    $targetPath = $shortcut.TargetPath
+                    
+                    # Check if target exists
+                    if (-not (Test-Path $targetPath)) {
+                        Write-Log "Removing broken shortcut: $shortcutPath (target missing: $targetPath)"
+                        Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue
+                        $removedCount++
+                    }
+                } catch {
+                    Write-Log "Error checking shortcut ${shortcutPath}: $_" -Level "WARN"
+                }
+            }
+        }
+    }
+    
+    if ($removedCount -gt 0) {
+        Write-Log "Removed $removedCount broken shortcut(s)" -Level "SUCCESS"
+    }
+    
+    return $removedCount
+}
+
+function Remove-AutoStart {
+    # Remove auto-start from Common Startup folder
+    $commonStartup = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
+    $commonShortcut = Join-Path $commonStartup "Workflow Capture.lnk"
+    if (Test-Path $commonShortcut) {
+        Remove-Item $commonShortcut -Force -ErrorAction SilentlyContinue
+        Write-Log "Removed common startup shortcut"
+    }
+    
+    # Remove auto-start registry entry
+    try {
+        $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+        if (Get-ItemProperty -Path $regPath -Name "WorkflowCapture" -ErrorAction SilentlyContinue) {
+            Remove-ItemProperty -Path $regPath -Name "WorkflowCapture" -Force -ErrorAction SilentlyContinue
+            Write-Log "Removed registry auto-start entry"
+        }
+    } catch {
+        # Ignore if doesn't exist
+    }
+    
+    # Remove auto-start shortcuts from all user profiles
+    $userProfiles = Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue | 
+        Where-Object { $_.Name -notin @("Public", "Default", "Default User", "All Users") }
+    
+    foreach ($profile in $userProfiles) {
+        $startupPath = "$($profile.FullName)\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
+        $shortcutPath = Join-Path $startupPath "Workflow Capture.lnk"
+        
+        if (Test-Path $shortcutPath) {
+            Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue
+            Write-Log "Removed existing auto-start shortcut for $($profile.Name)"
+        }
     }
 }
 
@@ -358,15 +534,27 @@ function Uninstall-OldInstallations {
         }
     }
     
-    # Also remove old installation directories manually
+    # Also remove old installation directories manually - ALWAYS check all user profiles
     $oldInstallDirs = @(
+        # Current user paths
         "$env:LOCALAPPDATA\Programs\l7s-workflow-capture",
         "$env:LOCALAPPDATA\Programs\workflow-capture",
+        # System-wide paths
         "${env:ProgramFiles}\Workflow Capture",
         "${env:ProgramFiles(x86)}\Workflow Capture",
         "${env:ProgramFiles}\L7S Workflow Capture",
         "${env:ProgramFiles(x86)}\L7S Workflow Capture"
     )
+    
+    # ALWAYS check all user profiles for old installations (not just when running as SYSTEM)
+    $userProfiles = Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue | 
+        Where-Object { $_.Name -notin @("Public", "Default", "Default User", "All Users") }
+    foreach ($profile in $userProfiles) {
+        $oldInstallDirs += "$($profile.FullName)\AppData\Local\Programs\l7s-workflow-capture"
+        $oldInstallDirs += "$($profile.FullName)\AppData\Local\Programs\workflow-capture"
+        $oldInstallDirs += "$($profile.FullName)\AppData\Local\Programs\Workflow Capture"
+        $oldInstallDirs += "$($profile.FullName)\AppData\Local\l7s-workflow-capture"
+    }
     
     foreach ($dir in $oldInstallDirs) {
         if (Test-Path $dir) {
@@ -383,17 +571,40 @@ function Uninstall-OldInstallations {
         }
     }
     
-    # Remove old desktop shortcuts
-    $desktopPath = [Environment]::GetFolderPath("Desktop")
-    $oldShortcuts = @(
-        (Join-Path $desktopPath "Workflow Capture.lnk"),
-        (Join-Path $desktopPath "L7S Workflow Capture.lnk")
+    # Remove old desktop shortcuts - ALWAYS check all locations
+    $desktopPaths = @(
+        # Public desktop (appears on all users)
+        "C:\Users\Public\Desktop"
     )
     
-    foreach ($shortcut in $oldShortcuts) {
-        if (Test-Path $shortcut) {
-            Remove-Item $shortcut -Force -ErrorAction SilentlyContinue
-            Write-Log "Removed old shortcut: $shortcut"
+    # Add current user desktop
+    $userDesktopPath = [Environment]::GetFolderPath("Desktop")
+    $publicDesktopPath = [Environment]::GetFolderPath("CommonDesktopDirectory")
+    if ($userDesktopPath) { $desktopPaths += $userDesktopPath }
+    if ($publicDesktopPath -and $publicDesktopPath -notin $desktopPaths) { $desktopPaths += $publicDesktopPath }
+    
+    # ALWAYS check all user profile desktops (not just when running as SYSTEM)
+    foreach ($profile in $userProfiles) {
+        $profileDesktop = Join-Path $profile.FullName "Desktop"
+        if ((Test-Path $profileDesktop) -and ($profileDesktop -notin $desktopPaths)) {
+            $desktopPaths += $profileDesktop
+        }
+    }
+    
+    $shortcutNames = @(
+        "Workflow Capture.lnk",
+        "L7S Workflow Capture.lnk",
+        "RECORD.lnk"
+    )
+    
+    foreach ($desktopPath in $desktopPaths) {
+        if (-not $desktopPath) { continue }
+        foreach ($shortcutName in $shortcutNames) {
+            $shortcut = Join-Path $desktopPath $shortcutName
+            if (Test-Path $shortcut) {
+                Remove-Item $shortcut -Force -ErrorAction SilentlyContinue
+                Write-Log "Removed old shortcut: $shortcut"
+            }
         }
     }
     
@@ -413,15 +624,47 @@ function Uninstall-OldInstallations {
 
 function Test-AlreadyInstalled {
     # Check if the application is already installed
+    # Focus on Program Files paths (per-machine install target)
+    # Still check user profiles to detect old per-user installs for cleanup
     $possiblePaths = @(
         "$InstallPath\Workflow Capture.exe",
         "${env:ProgramFiles}\Workflow Capture\Workflow Capture.exe",
         "${env:ProgramFiles(x86)}\Workflow Capture\Workflow Capture.exe"
     )
     
+    # Check Program Files paths first (primary location)
     foreach ($path in $possiblePaths) {
         if (Test-Path $path) {
+            Write-Log "Found existing installation at: $path"
             return $path
+        }
+    }
+    
+    # Also check user profiles for old per-user installs (these should be cleaned up)
+    $userProfiles = Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue | 
+        Where-Object { $_.Name -notin @("Public", "Default", "Default User", "All Users") }
+    foreach ($profile in $userProfiles) {
+        $userPaths = @(
+            "$($profile.FullName)\AppData\Local\Programs\l7s-workflow-capture\Workflow Capture.exe",
+            "$($profile.FullName)\AppData\Local\Programs\workflow-capture\Workflow Capture.exe",
+            "$($profile.FullName)\AppData\Local\Programs\Workflow Capture\Workflow Capture.exe"
+        )
+        foreach ($userPath in $userPaths) {
+            if (Test-Path $userPath) {
+                Write-Log "Found old per-user installation at: $userPath (will be migrated to Program Files)"
+                # Return null to trigger reinstall to proper location
+                return $null
+            }
+        }
+    }
+    
+    # Fall back to recursive search in Program Files
+    $searchPaths = @("$InstallPath", "${env:ProgramFiles}\Workflow Capture", "${env:ProgramFiles(x86)}\Workflow Capture")
+    foreach ($searchPath in $searchPaths) {
+        $result = Get-ExePath -SearchPath $searchPath -Recursive $true
+        if ($result) {
+            Write-Log "Found existing installation at: $result"
+            return $result
         }
     }
     
@@ -431,11 +674,16 @@ function Test-AlreadyInstalled {
 function Stop-RunningInstances {
     Write-Log "Checking for running instances of Workflow Capture..."
     
+    # Use taskkill for robust termination across all sessions (works when running as SYSTEM)
+    # This ensures processes in user sessions are killed, not just SYSTEM session
+    $taskKillResult = & taskkill /F /IM "Workflow Capture.exe" 2>&1
+    
+    # Also try Get-Process as backup and for counting
     $processes = Get-Process -Name "Workflow Capture" -ErrorAction SilentlyContinue
     
     if ($processes) {
         $count = ($processes | Measure-Object).Count
-        Write-Log "Found $count running instance(s) - terminating..."
+        Write-Log "Found $count remaining instance(s) after taskkill - terminating via PowerShell..."
         
         $processes | ForEach-Object {
             try {
@@ -446,45 +694,53 @@ function Stop-RunningInstances {
             }
         }
         
-        # Wait for processes to fully terminate
         Start-Sleep -Seconds 2
         Write-Log "All running instances terminated" -Level "SUCCESS"
         return $count
-    } else {
-        Write-Log "No running instances found"
-        return 0
+    } elseif ($taskKillResult -notlike "*not found*" -and $taskKillResult -notlike "*ERROR*") {
+        Write-Log "Terminated running instances via taskkill" -Level "SUCCESS"
+        Start-Sleep -Seconds 2
+        return 1
     }
+    
+    Write-Log "No running instances found"
+    return 0
 }
 
 function Start-Application {
     param([string]$ExePath)
     
+    # Check if running as SYSTEM - if so, don't try to start the app
+    # Starting as SYSTEM launches in Session 0 which is invisible to users
+    # The app will auto-start on next user login via Common Startup / HKLM Run
+    $isSystem = ([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq "S-1-5-18")
+    
+    if ($isSystem) {
+        Write-Log "Running as SYSTEM - skipping app launch (will auto-start on user login)" -Level "INFO"
+        Write-Log "Auto-start is configured via Common Startup and HKLM Run" -Level "INFO"
+        return $true
+    }
+    
     Write-Log "Starting $AppName..."
     
-    # Check if already running - reuse existing instance instead of starting new one
     $existingProcess = Get-Process -Name "Workflow Capture" -ErrorAction SilentlyContinue
-    if ($existingProcess) {
-        $processCount = ($existingProcess | Measure-Object).Count
-        if ($processCount -eq 1) {
-            Write-Log "$AppName is already running (PID: $($existingProcess.Id)) - reusing existing instance" -Level "SUCCESS"
-            return $true
-        } elseif ($processCount -gt 1) {
-            # Multiple instances running - kill all but the first one
-            Write-Log "Multiple instances detected ($processCount) - keeping only the first one" -Level "WARN"
-            $existingProcess | Select-Object -Skip 1 | ForEach-Object {
-                try {
-                    $_ | Stop-Process -Force
-                    Write-Log "Terminated duplicate instance (PID: $($_.Id))"
-                } catch {
-                    Write-Log "Failed to terminate duplicate instance: $_" -Level "WARN"
-                }
-            }
-            $remainingProcess = Get-Process -Name "Workflow Capture" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($remainingProcess) {
-                Write-Log "$AppName running with single instance (PID: $($remainingProcess.Id))" -Level "SUCCESS"
-                return $true
+    $processCount = Get-ProcessCount -ProcessName "Workflow Capture"
+    
+    if ($processCount -eq 1) {
+        Write-Log "$AppName is already running (PID: $($existingProcess.Id)) - reusing existing instance" -Level "SUCCESS"
+        return $true
+    } elseif ($processCount -gt 1) {
+        Write-Log "Multiple instances detected ($processCount) - keeping only the first one" -Level "WARN"
+        $existingProcess | Select-Object -Skip 1 | ForEach-Object {
+            try {
+                $_ | Stop-Process -Force
+                Write-Log "Terminated duplicate instance (PID: $($_.Id))"
+            } catch {
+                Write-Log "Failed to terminate duplicate instance: $_" -Level "WARN"
             }
         }
+        Write-Log "$AppName running with single instance" -Level "SUCCESS"
+        return $true
     }
     
     # No instance running - start a new one
@@ -511,6 +767,13 @@ function Write-NinjaRMMMessage {
         [hashtable]$Result
     )
     
+    # Determine app start status message
+    $appStartStatus = if ($Result.ApplicationStarted) {
+        if ($script:IsRunningAsSystem) { "Deferred to auto-start (SYSTEM context)" } else { "Yes" }
+    } else {
+        "No"
+    }
+    
     # Generate a clear summary message for NinjaRMM console
     $message = @"
 ================================================================================
@@ -519,13 +782,14 @@ L7S WORKFLOW CAPTURE - DEPLOYMENT SUMMARY
 Computer Name:      $($Result.ComputerName)
 Timestamp:          $($Result.Timestamp)
 Status:             $(if ($Result.Success) { "SUCCESS" } else { "FAILED" })
+Execution Context:  $(if ($script:IsRunningAsSystem) { "SYSTEM (NinjaRMM)" } else { "Interactive User" })
 --------------------------------------------------------------------------------
 ACTIONS PERFORMED:
   - Already Installed:    $(if ($Result.WasAlreadyInstalled) { "Yes (skipped download)" } else { "No (fresh install)" })
   - Instances Terminated: $($Result.InstancesTerminated)
   - Installation:         $(if ($Result.InstallationPerformed) { "Completed" } else { "Skipped (already installed)" })
-  - Auto-Start:           Configured
-  - Application Started:  $(if ($Result.ApplicationStarted) { "Yes" } else { "No" })
+  - Auto-Start:           Configured (Common Startup + HKLM Run)
+  - Application Started:  $appStartStatus
 --------------------------------------------------------------------------------
 INSTALLATION DETAILS:
   - Install Path:         $($Result.InstalledPath)
@@ -541,26 +805,43 @@ INSTALLATION DETAILS:
 }
 
 function Test-Installation {
-    # Wait a moment for installation to finalize
+    # Verify installation by finding the executable
+    # Focus on Program Files paths only (per-machine install target)
     Start-Sleep -Seconds 2
     
-    # Check for the installed executable (actual name is "Workflow Capture.exe")
+    # Check Program Files paths first (primary install location for per-machine)
     $possiblePaths = @(
         "$InstallPath\Workflow Capture.exe",
         "${env:ProgramFiles}\Workflow Capture\Workflow Capture.exe",
         "${env:ProgramFiles(x86)}\Workflow Capture\Workflow Capture.exe"
     )
     
+    Write-Log "Checking installation paths (Program Files)..."
     foreach ($path in $possiblePaths) {
         if (Test-Path $path) {
             $fileInfo = Get-Item $path
-            Write-Log "Verified installation at: $path"
+            Write-Log "Verified installation at: $path" -Level "SUCCESS"
             Write-Log "  Version: $($fileInfo.VersionInfo.FileVersion)"
             return $path
         }
     }
     
-    Write-Log "Could not verify installation - executable not found" -Level "WARN"
+    # Recursive search in Program Files as fallback
+    Write-Log "Searching recursively in Program Files..."
+    $searchPaths = @("$InstallPath", "${env:ProgramFiles}\Workflow Capture", "${env:ProgramFiles(x86)}\Workflow Capture")
+    
+    foreach ($searchPath in $searchPaths) {
+        if (Test-Path $searchPath) {
+            $foundExe = Get-ChildItem -Path $searchPath -Filter "Workflow Capture.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($foundExe) {
+                Write-Log "Found executable: $($foundExe.FullName)" -Level "SUCCESS"
+                Write-Log "  Version: $($foundExe.VersionInfo.FileVersion)"
+                return $foundExe.FullName
+            }
+        }
+    }
+    
+    Write-Log "Could not verify installation - executable not found in Program Files" -Level "ERROR"
     return $null
 }
 
@@ -575,10 +856,20 @@ function Remove-TempFiles {
 # Main Execution
 # =============================================================================
 
+# Detect if running as SYSTEM account (NinjaRMM typically runs as SYSTEM)
+$script:IsRunningAsSystem = ([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq "S-1-5-18")
+
 Write-Log "=========================================="
 Write-Log "$AppName - Silent Installation"
 Write-Log "Computer: $env:COMPUTERNAME"
 Write-Log "User: $env:USERNAME"
+if ($script:IsRunningAsSystem) {
+    Write-Log "Context: Running as SYSTEM (NinjaRMM deployment mode)"
+    Write-Log "  - App will NOT be started (runs in Session 0)"
+    Write-Log "  - Auto-start configured for next user login"
+} else {
+    Write-Log "Context: Running as interactive user"
+}
 Write-Log "=========================================="
 
 # Initialize result object for NinjaRMM
@@ -601,6 +892,10 @@ $result.InstancesTerminated = Stop-RunningInstances
 $uninstalledCount = Uninstall-OldInstallations
 Write-Log "Removed $uninstalledCount old installation(s)"
 
+# Remove any broken shortcuts pointing to old paths
+$brokenShortcuts = Remove-BrokenShortcuts
+Write-Log "Cleaned up $brokenShortcuts broken shortcut(s)"
+
 # Check if already installed
 $existingInstallPath = Test-AlreadyInstalled
 
@@ -615,22 +910,8 @@ if ($existingInstallPath -and -not $Force) {
         Write-Log "Force reinstall requested - proceeding with installation"
     }
     
-    # Get installer - Priority: URL > Source > GitHub
-    $installerPath = $null
-
-    if ($InstallerUrl) {
-        # Explicit URL provided
-        Write-Log "Using provided URL for installer"
-        $installerPath = Get-InstallerFromUrl -Url $InstallerUrl
-    } elseif ($InstallerSource) {
-        # Network/local source provided
-        Write-Log "Using provided source path for installer"
-        $installerPath = Get-InstallerFromSource -Source $InstallerSource
-    } else {
-        # Default: Download specific release from GitHub
-        Write-Log "No installer source specified - downloading $ReleaseVersion from GitHub"
-        $installerPath = Get-InstallerFromGitHub
-    }
+    # Get installer from priority: URL > Source > GitHub
+    $installerPath = Get-Installer -Url $InstallerUrl -Source $InstallerSource
 
     if (-not $installerPath) {
         Write-Log "Failed to obtain installer" -Level "ERROR"

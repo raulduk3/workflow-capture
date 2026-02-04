@@ -141,9 +141,12 @@ function createWindow(): void {
     if (!isQuitting) {
       event.preventDefault();
       
+      // Check both recorder status AND system state (recording state is set before recorder starts)
       const isRecording = nativeRecorder?.getRecordingStatus() ?? false;
-      if (isRecording) {
-        // While recording: minimize (stays visible in taskbar)
+      const isRecordingState = currentSystemState === 'recording' || currentSystemState === 'processing';
+      
+      if (isRecording || isRecordingState) {
+        // While recording or processing: minimize (stays visible in taskbar)
         mainWindow?.minimize();
         log('Window minimized - recording continues, visible in taskbar');
       } else {
@@ -253,18 +256,24 @@ async function toggleRecording(): Promise<void> {
   } else {
     // Start recording with empty note (quick capture from tray/shortcut)
     try {
+      // Set recording state BEFORE starting capture to prevent window hiding
+      currentSystemState = 'recording';
+      updateTrayMenu();
+      updateTrayIcon();
+      
       const recordingPath = await sessionManager.startSession('');
       nativeRecorder.setOutputPath(recordingPath);
       await nativeRecorder.startRecording(mainWindow);
       
-      currentSystemState = 'recording';
-      updateTrayMenu();
-      updateTrayIcon();
       startRecordingTimer();
       sendStatus({ state: 'recording', message: 'Recording', recordingDuration: 0 });
       
       log(`Recording started: ${recordingPath}`);
     } catch (error) {
+      // Reset state on failure
+      currentSystemState = 'idle';
+      updateTrayMenu();
+      updateTrayIcon();
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       log(`Failed to start recording: ${errorMessage}`);
       sendStatus({ state: 'error', message: 'Failed to start recording', error: errorMessage });
@@ -540,6 +549,12 @@ function setupIpcHandlers(): void {
         throw new Error('System not initialized');
       }
 
+      // Set recording state BEFORE starting capture to prevent window hiding
+      // This ensures the close handler knows we're in recording mode during capture setup
+      currentSystemState = 'recording';
+      updateTrayMenu();
+      updateTrayIcon();
+
       // Start session and get the recording path (includes metadata in filename)
       const recordingPath = await sessionManager.startSession(note);
       
@@ -548,11 +563,6 @@ function setupIpcHandlers(): void {
       
       // Start recording
       await nativeRecorder.startRecording(mainWindow);
-      
-      // Update tray to show recording state with pause icon
-      currentSystemState = 'recording';
-      updateTrayMenu();
-      updateTrayIcon();
       
       startRecordingTimer();
       sendStatus({ state: 'recording', message: 'Recording', recordingDuration: 0 });
@@ -565,6 +575,10 @@ function setupIpcHandlers(): void {
       log(`Recording started: ${recordingPath}`);
       return { success: true, sessionId: recordingPath };
     } catch (error) {
+      // Reset state on failure
+      currentSystemState = 'idle';
+      updateTrayMenu();
+      updateTrayIcon();
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       log(`Failed to start recording: ${errorMessage}`);
       return { success: false, error: errorMessage };

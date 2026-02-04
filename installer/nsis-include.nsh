@@ -33,8 +33,8 @@
 !macroend
 
 !macro customInstallMode
-    ; Per-user installation
-    StrCpy $isForceCurrentInstall "1"
+    ; Per-machine installation (all users) - required for NinjaRMM/SYSTEM deployments
+    ; Remove per-user forcing to allow proper Program Files installation
 !macroend
 
 !macro customUnInstall
