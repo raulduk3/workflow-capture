@@ -54,6 +54,38 @@ function Get-ArchivePath {
     return Join-Path $BasePath "$AppName\$ArchiveFolder"
 }
 
+function Remove-OldArchives {
+    param(
+        [int]$DaysToKeep = 7
+    )
+    
+    $archivePath = Get-ArchivePath
+    
+    if (-not (Test-Path $archivePath)) {
+        return
+    }
+    
+    $cutoffDate = (Get-Date).AddDays(-$DaysToKeep)
+    $oldArchives = Get-ChildItem $archivePath -Filter "*.zip" -File -ErrorAction SilentlyContinue | 
+                   Where-Object { $_.LastWriteTime -lt $cutoffDate }
+    
+    if (-not $oldArchives -or $oldArchives.Count -eq 0) {
+        Write-Log "No archives older than $DaysToKeep days found"
+        return
+    }
+    
+    Write-Log "Found $($oldArchives.Count) archive(s) older than $DaysToKeep days"
+    
+    foreach ($archive in $oldArchives) {
+        try {
+            Remove-Item -Path $archive.FullName -Force
+            Write-Log "Deleted old archive: $($archive.Name)"
+        } catch {
+            Write-Log "WARNING: Could not delete $($archive.Name): $_"
+        }
+    }
+}
+
 function Archive-Recordings {
     param(
         [string[]]$FilesToArchive
@@ -208,6 +240,9 @@ if (-not (Test-Path $DestinationPath)) {
 
 # Copy recordings to network share
 $result = Copy-Recordings -DestinationBase $DestinationPath
+
+# Clean up old archives (older than 7 days)
+Remove-OldArchives -DaysToKeep 7
 
 # Summary
 Write-Log "=========================================="
