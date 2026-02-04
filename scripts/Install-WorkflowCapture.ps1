@@ -11,12 +11,18 @@
 #   - Kills all running instances before install/restart
 #   - Always enables auto-start at Windows login
 #   - Starts the application after installation
+#   - Deploys config.json for remote configuration (no reinstall needed)
 #   - Provides detailed NinjaRMM summary output
 #
 # Usage:
 #   .\Install-WorkflowCapture.ps1                                    # Download from GitHub
 #   .\Install-WorkflowCapture.ps1 -InstallerSource "\\server\share"  # Use network share
 #   .\Install-WorkflowCapture.ps1 -Force                             # Force reinstall
+#   .\Install-WorkflowCapture.ps1 -MaxRecordingMinutes 10            # Set 10 min limit
+#
+# Configuration Options:
+#   -MaxRecordingMinutes <int>  : Max recording duration (default: 5)
+#   -VideoBitrateMbps <int>     : Video quality bitrate (default: 5)
 #
 # Exit Codes:
 #   0 - Success
@@ -36,10 +42,17 @@ param(
     [string]$InstallerUrl = "",
     
     [Parameter(Mandatory=$false)]
-    [string]$InstallerFileName = "L7S-Workflow-Capture-1.1.3-x64.exe",
+    [string]$InstallerFileName = "L7S-Workflow-Capture-1.1.4-x64.exe",
     
     [Parameter(Mandatory=$false)]
-    [switch]$Force = $false
+    [switch]$Force = $false,
+    
+    # Configuration options (deployed to config.json)
+    [Parameter(Mandatory=$false)]
+    [int]$MaxRecordingMinutes = 10,
+    
+    [Parameter(Mandatory=$false)]
+    [int]$VideoBitrateMbps = 5
 )
 
 # =============================================================================
@@ -160,6 +173,44 @@ function Initialize-SessionsDirectory {
     }
 }
 
+function Deploy-Configuration {
+    # Deploy config.json with recording settings
+    # This allows changing settings across clients without reinstalling
+    param(
+        [int]$MaxMinutes = 5,
+        [int]$BitrateMbps = 5
+    )
+    
+    $configDir = "C:\temp\L7SWorkflowCapture"
+    $configPath = "$configDir\config.json"
+    
+    Write-Log "Deploying configuration to: $configPath"
+    
+    try {
+        # Ensure directory exists
+        if (-not (Test-Path $configDir)) {
+            New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+        }
+        
+        # Build config object
+        $config = @{
+            maxRecordingMinutes = $MaxMinutes
+            videoBitrateMbps = $BitrateMbps
+        }
+        
+        # Write config file
+        $configJson = $config | ConvertTo-Json -Depth 2
+        Set-Content -Path $configPath -Value $configJson -Encoding UTF8 -Force
+        
+        Write-Log "Configuration deployed:" -Level "SUCCESS"
+        Write-Log "  - Max Recording: $MaxMinutes minutes"
+        Write-Log "  - Video Bitrate: $BitrateMbps Mbps"
+        return $true
+    } catch {
+        Write-Log "Failed to deploy configuration: $_" -Level "ERROR"
+        return $false
+    }
+}
 
 function Get-Installer {
     # Get installer from URL, Source, or GitHub (in priority order)
@@ -509,6 +560,10 @@ function Remove-AutoStart {
 
 function Uninstall-OldInstallations {
     Write-Log "Checking for old installations to remove..."
+    Write-Log "NOTE: Session data in C:\temp\L7SWorkflowCapture\ is PRESERVED (not touched)"
+    
+    # IMPORTANT: Never touch the sessions/data directory
+    $protectedPath = "C:\temp\L7SWorkflowCapture"
     
     $uninstallPaths = @(
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
@@ -581,6 +636,11 @@ function Uninstall-OldInstallations {
     foreach ($dir in $oldInstallDirs) {
         if (Test-Path $dir) {
             try {
+                # SAFETY: Never remove the sessions/data directory
+                if ($dir -like "*L7SWorkflowCapture*" -or $dir -like "*\temp\*") {
+                    Write-Log "SKIPPING protected path: $dir" -Level "WARN"
+                    continue
+                }
                 # Don't remove if this is where we're installing to
                 if ($dir -ne $InstallPath) {
                     Write-Log "Removing old installation directory: $dir"
@@ -1022,6 +1082,27 @@ if (-not $sessionsInitialized) {
     Write-Log "Warning: Sessions directory initialization failed - users may need to run as admin once" -Level "WARN"
 }
 
+# Check for existing session data (PRESERVED during install/upgrade)
+$sessionsPath = "C:\temp\L7SWorkflowCapture\Sessions"
+$existingRecordings = @()
+if (Test-Path $sessionsPath) {
+    $existingRecordings = Get-ChildItem $sessionsPath -Filter "*.webm" -File -ErrorAction SilentlyContinue
+}
+$existingCount = $existingRecordings.Count
+if ($existingCount -gt 0) {
+    $totalSizeMB = [math]::Round(($existingRecordings | Measure-Object -Property Length -Sum).Sum / 1MB, 2)
+    Write-Log "PRESERVED: $existingCount existing recording(s) ($totalSizeMB MB) in $sessionsPath" -Level "SUCCESS"
+} else {
+    Write-Log "No existing recordings found (fresh install or already extracted)"
+}
+
+# Deploy configuration file (allows remote config changes without reinstall)
+Write-Log "Deploying configuration..."
+$configDeployed = Deploy-Configuration -MaxMinutes $MaxRecordingMinutes -BitrateMbps $VideoBitrateMbps
+if (-not $configDeployed) {
+    Write-Log "Warning: Configuration deployment failed - app will use defaults" -Level "WARN"
+}
+
 # Always configure auto-start (no flag condition)
 Write-Log "Configuring auto-start (always enabled)..."
 Set-AutoStart -ExePath $installedPath
@@ -1050,6 +1131,9 @@ Write-Log "=========================================="
 Write-Log "Application: $AppName"
 Write-Log "Location: $installedPath"
 Write-Log "Auto-Start: Always Enabled"
+Write-Log "Max Recording: $MaxRecordingMinutes minutes"
+Write-Log "Video Bitrate: $VideoBitrateMbps Mbps"
+Write-Log "Existing Recordings: $existingCount PRESERVED"
 Write-Log "App Running: $(if ($appStarted) { 'Yes' } else { 'No' })"
 Write-Log "Log File: $LogPath"
 Write-Log "=========================================="
