@@ -28,15 +28,18 @@ win:
   requestedExecutionLevel: asInvoker
 
 nsis:
-  oneClick: true
+  oneClick: false
   perMachine: true
   allowElevation: true
+  allowToChangeInstallationDirectory: false
   runAfterFinish: false
   createDesktopShortcut: false
   createStartMenuShortcut: true
   shortcutName: Workflow Capture
   include: installer/nsis-include.nsh
   warningsAsErrors: false
+  installerSidebar: null
+  uninstallerSidebar: null
 
 mac:
   target:
