@@ -42,7 +42,7 @@ param(
     [string]$InstallerUrl = "",
     
     [Parameter(Mandatory=$false)]
-    [string]$InstallerFileName = "L7S-Workflow-Capture-1.1.4-x64.exe",
+    [string]$InstallerFileName = "L7S-Workflow-Capture-1.1.5-x64.exe",
     
     [Parameter(Mandatory=$false)]
     [switch]$Force = $true,
@@ -61,7 +61,7 @@ param(
 
 $AppName = "L7S Workflow Capture"
 $AppPublisher = "Layer 7 Systems"
-$ReleaseVersion = "v1.1.4"
+$ReleaseVersion = "v1.1.5"
 $GitHubRepo = "raulduk3/workflow-capture"
 $GitHubReleaseUrl = "https://github.com/$GitHubRepo/releases/download/$ReleaseVersion/$InstallerFileName"
 $InstallPath = "${env:ProgramFiles}\Workflow Capture"

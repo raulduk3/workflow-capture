@@ -11,9 +11,29 @@ interface SystemStatus {
   error?: string;
 }
 
+interface DisplayInfo {
+  index: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scaleFactor: number;
+}
+
+interface ScreenSource {
+  id: string;
+  name: string;
+}
+
 interface CaptureConfig {
   sourceId: string;
   outputPath: string;
+  canvasWidth?: number;  // Total width for multi-monitor capture
+  canvasHeight?: number; // Total height for multi-monitor capture
+  // Windows multi-monitor compositing
+  needsCompositing?: boolean;
+  allScreenSources?: ScreenSource[];
+  displayInfo?: DisplayInfo[];
 }
 
 // Constants
@@ -89,6 +109,13 @@ let mediaRecorder: MediaRecorder | null = null;
 let recordedChunks: Blob[] = [];
 let currentOutputPath: string | null = null;
 let mediaStream: MediaStream | null = null;
+
+// Multi-monitor compositing state (Windows)
+let compositeCanvas: HTMLCanvasElement | null = null;
+let compositeCtx: CanvasRenderingContext2D | null = null;
+let videoElements: HTMLVideoElement[] = [];
+let additionalStreams: MediaStream[] = [];
+let animationFrameId: number | null = null;
 
 // Cleanup functions for event listeners
 let cleanupStatusListener: (() => void) | null = null;
@@ -183,33 +210,64 @@ function updateUI(status: SystemStatus): void {
 
 /**
  * Start capturing screen using desktopCapturer stream
+ * On Windows with multiple monitors, composites all screens into one canvas
  */
 async function startCapture(config: CaptureConfig): Promise<void> {
   console.log('[Renderer] Starting capture with source:', config.sourceId);
+  console.log('[Renderer] Needs compositing:', config.needsCompositing);
+  
+  // Use provided canvas dimensions or fallback to reasonable defaults
+  const captureWidth = config.canvasWidth || 7680;
+  const captureHeight = config.canvasHeight || 4320;
+  
+  console.log(`[Renderer] Target canvas dimensions: ${captureWidth}x${captureHeight}`);
   
   try {
-    // Get media stream from the selected source
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: {
-        // @ts-ignore - Electron-specific constraint
-        mandatory: {
-          chromeMediaSource: 'desktop',
-          chromeMediaSourceId: config.sourceId,
-          minWidth: 1920,
-          maxWidth: 3840,
-          minHeight: 1080,
-          maxHeight: 2160,
-          minFrameRate: 30,
-          maxFrameRate: 30,
-        },
-      },
-    });
-
     currentOutputPath = config.outputPath;
     recordedChunks = [];
 
-    // Create MediaRecorder with WebM format (will be converted to MP4 by main process)
+    let streamToRecord: MediaStream;
+
+    if (config.needsCompositing && config.allScreenSources && config.displayInfo && config.allScreenSources.length > 1) {
+      // Windows multi-monitor: capture all screens and composite them
+      console.log(`[Renderer] Setting up multi-monitor compositing for ${config.allScreenSources.length} screens`);
+      
+      streamToRecord = await setupMultiMonitorCapture(
+        config.allScreenSources,
+        config.displayInfo,
+        captureWidth,
+        captureHeight
+      );
+    } else {
+      // Single screen or macOS "Entire Screen" capture
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          // @ts-ignore - Electron-specific constraint
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: config.sourceId,
+            minWidth: 1280,
+            maxWidth: captureWidth,
+            minHeight: 720,
+            maxHeight: captureHeight,
+            minFrameRate: 30,
+            maxFrameRate: 30,
+          },
+        },
+      });
+
+      // Log actual captured video dimensions for verification
+      const videoTrack = mediaStream.getVideoTracks()[0];
+      if (videoTrack) {
+        const settings = videoTrack.getSettings();
+        console.log(`[Renderer] Actual capture resolution: ${settings.width}x${settings.height}`);
+      }
+
+      streamToRecord = mediaStream;
+    }
+
+    // Create MediaRecorder with WebM format
     const options: MediaRecorderOptions = {
       mimeType: 'video/webm;codecs=vp9',
       videoBitsPerSecond: VIDEO_BITRATE,
@@ -225,7 +283,7 @@ async function startCapture(config: CaptureConfig): Promise<void> {
 
     console.log('[Renderer] Using codec:', options.mimeType);
     
-    mediaRecorder = new MediaRecorder(mediaStream, options);
+    mediaRecorder = new MediaRecorder(streamToRecord, options);
 
     mediaRecorder.ondataavailable = (event: BlobEvent) => {
       if (event.data.size > 0) {
@@ -235,6 +293,12 @@ async function startCapture(config: CaptureConfig): Promise<void> {
 
     mediaRecorder.onstop = async () => {
       console.log('[Renderer] MediaRecorder stopped, saving file...');
+      
+      // Stop compositing animation loop if active
+      if (animationFrameId !== null) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+      }
       
       try {
         // Combine all chunks into a single blob
@@ -256,7 +320,8 @@ async function startCapture(config: CaptureConfig): Promise<void> {
         });
       }
       
-      // Clean up
+      // Clean up all resources
+      cleanupCompositing();
       if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
         mediaStream = null;
@@ -275,8 +340,135 @@ async function startCapture(config: CaptureConfig): Promise<void> {
     
   } catch (error) {
     console.error('[Renderer] Failed to start capture:', error);
+    cleanupCompositing();
     throw error;
   }
+}
+
+/**
+ * Set up multi-monitor capture by compositing all screens onto a canvas
+ * Used on Windows where each monitor is a separate source
+ */
+async function setupMultiMonitorCapture(
+  sources: ScreenSource[],
+  displays: DisplayInfo[],
+  canvasWidth: number,
+  canvasHeight: number
+): Promise<MediaStream> {
+  console.log('[Renderer] Setting up canvas for multi-monitor compositing');
+  
+  // Create offscreen canvas for compositing
+  compositeCanvas = document.createElement('canvas');
+  compositeCanvas.width = canvasWidth;
+  compositeCanvas.height = canvasHeight;
+  compositeCtx = compositeCanvas.getContext('2d');
+  
+  if (!compositeCtx) {
+    throw new Error('Failed to create canvas context for compositing');
+  }
+
+  // Sort displays by their index to match source order
+  const sortedDisplays = [...displays].sort((a, b) => a.index - b.index);
+  
+  // Capture each screen
+  for (let i = 0; i < sources.length && i < sortedDisplays.length; i++) {
+    const source = sources[i];
+    const display = sortedDisplays[i];
+    
+    console.log(`[Renderer] Capturing screen ${i}: ${source.name} -> position (${display.x}, ${display.y})`);
+    
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          // @ts-ignore - Electron-specific constraint
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: source.id,
+            minWidth: 640,
+            maxWidth: display.width,
+            minHeight: 480,
+            maxHeight: display.height,
+            minFrameRate: 30,
+            maxFrameRate: 30,
+          },
+        },
+      });
+      
+      additionalStreams.push(stream);
+      
+      // Create video element to render stream
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.muted = true;
+      video.autoplay = true;
+      // Store display info on video element for positioning
+      (video as any)._displayInfo = display;
+      videoElements.push(video);
+      
+      await video.play();
+      
+      const settings = stream.getVideoTracks()[0]?.getSettings();
+      console.log(`[Renderer] Screen ${i} capture resolution: ${settings?.width}x${settings?.height}`);
+    } catch (err) {
+      console.error(`[Renderer] Failed to capture screen ${i}:`, err);
+    }
+  }
+
+  if (videoElements.length === 0) {
+    throw new Error('Failed to capture any screens for compositing');
+  }
+
+  // Start rendering loop to composite all screens
+  const renderFrame = () => {
+    if (!compositeCtx || !compositeCanvas) return;
+    
+    // Clear canvas with black background
+    compositeCtx.fillStyle = '#000';
+    compositeCtx.fillRect(0, 0, compositeCanvas.width, compositeCanvas.height);
+    
+    // Draw each video at its display position
+    for (const video of videoElements) {
+      const display = (video as any)._displayInfo as DisplayInfo;
+      if (display && video.readyState >= 2) {
+        compositeCtx.drawImage(video, display.x, display.y, display.width, display.height);
+      }
+    }
+    
+    animationFrameId = requestAnimationFrame(renderFrame);
+  };
+  
+  renderFrame();
+  
+  // Capture stream from canvas at 30fps
+  const canvasStream = compositeCanvas.captureStream(30);
+  console.log(`[Renderer] Composited stream created: ${canvasWidth}x${canvasHeight}`);
+  
+  return canvasStream;
+}
+
+/**
+ * Clean up compositing resources
+ */
+function cleanupCompositing(): void {
+  if (animationFrameId !== null) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
+  }
+  
+  for (const video of videoElements) {
+    video.pause();
+    video.srcObject = null;
+  }
+  videoElements = [];
+  
+  for (const stream of additionalStreams) {
+    stream.getTracks().forEach(track => track.stop());
+  }
+  additionalStreams = [];
+  
+  compositeCanvas = null;
+  compositeCtx = null;
 }
 
 /**
@@ -294,6 +486,7 @@ function stopCapture(): void {
  * Clean up all media resources
  */
 function cleanupMedia(): void {
+  cleanupCompositing();
   if (mediaStream) {
     mediaStream.getTracks().forEach(track => track.stop());
     mediaStream = null;
