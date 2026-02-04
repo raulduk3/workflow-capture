@@ -45,11 +45,11 @@ param(
     [string]$InstallerFileName = "L7S-Workflow-Capture-1.1.4-x64.exe",
     
     [Parameter(Mandatory=$false)]
-    [switch]$Force = $false,
+    [switch]$Force = $true,
     
     # Configuration options (deployed to config.json)
     [Parameter(Mandatory=$false)]
-    [int]$MaxRecordingMinutes = 10,
+    [int]$MaxRecordingMinutes = 1,
         
     [Parameter(Mandatory=$false)]
     [int]$VideoBitrateMbps = 5
