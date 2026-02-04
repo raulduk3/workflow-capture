@@ -102,34 +102,92 @@ export class NativeRecorder {
       this.log(`  [${i}] id: ${s.id}, name: "${s.name}"`);
     });
 
-    // Find the best source for multi-screen capture:
-    // - On macOS: "Entire Screen" captures all displays
-    // - On Windows: Look for "Entire screen" (case may vary) or screen:0:0 which is often all screens
-    // - Fallback: Use the first screen source
-    let selectedSource = sources.find(s => 
-      s.name.toLowerCase() === 'entire screen' || 
-      s.name.toLowerCase().includes('entire')
-    );
+    // Calculate total canvas dimensions for all monitors
+    const canvasDimensions = this.getCanvasDimensions();
+    this.log(`Multi-monitor canvas: ${canvasDimensions.width}x${canvasDimensions.height} (${canvasDimensions.displays.length} display(s))`);
     
-    // On Windows, if no "Entire Screen", try to find screen 0 which often represents all displays
-    if (!selectedSource) {
-      selectedSource = sources.find(s => s.id.includes('screen:0:0'));
+    // Calculate display offsets (normalized so minimum x,y is 0,0)
+    const displays = screen.getAllDisplays();
+    let minX = Infinity, minY = Infinity;
+    for (const d of displays) {
+      minX = Math.min(minX, d.bounds.x);
+      minY = Math.min(minY, d.bounds.y);
     }
     
-    // Final fallback: first source
+    const displayInfo = displays.map((d, i) => ({
+      index: i,
+      x: d.bounds.x - minX,
+      y: d.bounds.y - minY,
+      width: d.bounds.width,
+      height: d.bounds.height,
+      scaleFactor: d.scaleFactor,
+    }));
+    
+    displayInfo.forEach((d) => {
+      this.log(`  Display ${d.index}: ${d.width}x${d.height} at (${d.x}, ${d.y}), scaleFactor: ${d.scaleFactor}`);
+    });
+
+    // Find the best source for multi-screen capture:
+    // Platform-specific behavior:
+    // - macOS: "Entire Screen" captures all displays as one video
+    // - Windows: Individual screens are listed; we capture all and composite them
+    
+    let selectedSource: Electron.DesktopCapturerSource | undefined;
+    const platform = process.platform;
+    const needsCompositing = platform === 'win32' && displays.length > 1;
+    
+    if (platform === 'darwin') {
+      // macOS: Look for "Entire Screen" which captures all displays
+      selectedSource = sources.find(s => 
+        s.name.toLowerCase() === 'entire screen' || 
+        s.name.toLowerCase().includes('entire')
+      );
+    } else if (platform === 'win32') {
+      // Windows 10/11: desktopCapturer returns individual screens
+      // We'll capture all screens and composite them in the renderer
+      // First screen is used as primary; all screens sent for compositing
+      selectedSource = sources.find(s => s.id.includes('screen:0:0'));
+      
+      if (!selectedSource) {
+        selectedSource = sources.find(s => s.name === 'Screen 1');
+      }
+    } else {
+      // Linux: Look for entire screen or first screen
+      selectedSource = sources.find(s => 
+        s.name.toLowerCase().includes('entire') ||
+        s.id.includes('screen:0:0')
+      );
+    }
+    
+    // Final fallback: first screen source
     if (!selectedSource) {
       selectedSource = sources[0];
+      this.log(`Warning: Using fallback source. Multi-monitor capture may only show primary display.`);
     }
     
-    this.log(`Selected source for recording: "${selectedSource.name}" (${selectedSource.id})`);
+    this.log(`Selected source for recording: "${selectedSource.name}" (${selectedSource.id}) [platform: ${platform}]`);
+    this.log(`Multi-monitor compositing: ${needsCompositing ? 'enabled' : 'disabled'}`);
     
     // Output path already set via setOutputPath()
     this.log(`Output WebM: ${this.outputWebmPath}`);
 
-    // Send start command to renderer with source ID
+    // Build list of all screen sources for Windows multi-monitor compositing
+    const allScreenSources = needsCompositing 
+      ? sources
+          .filter(s => s.id.startsWith('screen:'))
+          .map(s => ({ id: s.id, name: s.name }))
+      : [];
+
+    // Send start command to renderer with source ID and canvas dimensions for multi-monitor support
     mainWindow.webContents.send('start-capture', {
       sourceId: selectedSource.id,
       outputPath: this.outputWebmPath,
+      canvasWidth: canvasDimensions.width,
+      canvasHeight: canvasDimensions.height,
+      // Windows multi-monitor compositing data
+      needsCompositing,
+      allScreenSources,
+      displayInfo,
     });
 
     this.isRecording = true;
