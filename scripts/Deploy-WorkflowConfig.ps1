@@ -68,10 +68,11 @@ $config = @{
     videoBitrateMbps = $VideoBitrateMbps
 }
 
-# Write config file
+# Write config file (without BOM for proper JSON parsing)
 try {
     $configJson = $config | ConvertTo-Json -Depth 2
-    Set-Content -Path $ConfigPath -Value $configJson -Encoding UTF8 -Force
+    # Use .NET method to write UTF-8 without BOM (PowerShell's -Encoding UTF8 adds BOM)
+    [System.IO.File]::WriteAllText($ConfigPath, $configJson)
     Write-Log "Configuration saved to: $ConfigPath"
     Write-Log "Settings:"
     Write-Log "  - Max Recording Duration: $MaxRecordingMinutes minutes"

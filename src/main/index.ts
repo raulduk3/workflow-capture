@@ -30,17 +30,32 @@ function loadExternalConfig(): void {
   const basePath = process.platform === 'win32' ? 'C:\\temp' : '/tmp';
   const configPath = path.join(basePath, APP_CONSTANTS.APP_NAME, APP_CONSTANTS.CONFIG_FILENAME);
   
+  log(`Loading config - Platform: ${process.platform}, Config path: ${configPath}`);
+  
   try {
-    if (fs.existsSync(configPath)) {
-      const configData = fs.readFileSync(configPath, 'utf-8');
+    const configExists = fs.existsSync(configPath);
+    log(`Config file exists: ${configExists}`);
+    
+    if (configExists) {
+      let configData = fs.readFileSync(configPath, 'utf-8');
+      
+      // Strip UTF-8 BOM if present (Windows PowerShell adds this with -Encoding UTF8)
+      if (configData.charCodeAt(0) === 0xFEFF) {
+        configData = configData.slice(1);
+        log(`Stripped UTF-8 BOM from config file`);
+      }
+      
+      log(`Config file contents: ${configData}`);
       const externalConfig: ExternalConfig = JSON.parse(configData);
       
       // Merge with defaults, validating values
       if (typeof externalConfig.maxRecordingMinutes === 'number' && externalConfig.maxRecordingMinutes > 0) {
         runtimeConfig.maxRecordingMinutes = externalConfig.maxRecordingMinutes;
+        log(`Applied maxRecordingMinutes: ${runtimeConfig.maxRecordingMinutes}`);
       }
       if (typeof externalConfig.videoBitrateMbps === 'number' && externalConfig.videoBitrateMbps > 0) {
         runtimeConfig.videoBitrateMbps = externalConfig.videoBitrateMbps;
+        log(`Applied videoBitrateMbps: ${runtimeConfig.videoBitrateMbps}`);
       }
       
       log(`Loaded external config from ${configPath}:`);

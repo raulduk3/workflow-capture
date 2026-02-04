@@ -198,9 +198,10 @@ function Deploy-Configuration {
             videoBitrateMbps = $BitrateMbps
         }
         
-        # Write config file
+        # Write config file (without BOM for proper JSON parsing)
         $configJson = $config | ConvertTo-Json -Depth 2
-        Set-Content -Path $configPath -Value $configJson -Encoding UTF8 -Force
+        # Use .NET method to write UTF-8 without BOM (PowerShell's -Encoding UTF8 adds BOM)
+        [System.IO.File]::WriteAllText($configPath, $configJson)
         
         Write-Log "Configuration deployed:" -Level "SUCCESS"
         Write-Log "  - Max Recording: $MaxMinutes minutes"
