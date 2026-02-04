@@ -9,6 +9,70 @@ PowerShell scripts for deploying and managing L7S Workflow Capture via Ninja RMM
 | `Install-WorkflowCapture.ps1` | Silent installation on client machines | Administrator |
 | `Uninstall-WorkflowCapture.ps1` | Silent removal from client machines | Administrator |
 | `Extract-WorkflowCaptures.ps1` | Collect recordings from all users | Administrator |
+| `Deploy-WorkflowConfig.ps1` | Deploy/update configuration remotely | Administrator |
+
+---
+
+## Deploy-WorkflowConfig.ps1
+
+**Deploy or update recording settings across all clients without reinstalling the app.**
+
+The app reads its configuration from `C:\temp\L7SWorkflowCapture\config.json` at startup. This script creates or updates that config file, allowing you to change settings like max recording duration across your entire fleet.
+
+### Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `-MaxRecordingMinutes` | Int | `5` | Maximum recording duration (1-60 minutes) |
+| `-VideoBitrateMbps` | Int | `5` | Video quality bitrate (1-50 Mbps) |
+| `-RestartApp` | Switch | `$false` | Restart the app to apply changes immediately |
+
+### Config File Format
+
+```json
+{
+  "maxRecordingMinutes": 10,
+  "videoBitrateMbps": 5
+}
+```
+
+### Examples
+
+```powershell
+# Set max recording to 10 minutes
+.\Deploy-WorkflowConfig.ps1 -MaxRecordingMinutes 10
+
+# Set max recording to 15 minutes with higher quality
+.\Deploy-WorkflowConfig.ps1 -MaxRecordingMinutes 15 -VideoBitrateMbps 8
+
+# Update config and restart the app immediately
+.\Deploy-WorkflowConfig.ps1 -MaxRecordingMinutes 10 -RestartApp
+
+# Set to 30 minutes for longer workflows
+.\Deploy-WorkflowConfig.ps1 -MaxRecordingMinutes 30
+```
+
+### Ninja RMM Configuration
+
+1. Create a new Script in Ninja RMM
+2. Set **Script Type**: PowerShell
+3. Set **Run As**: System (or Administrator)
+4. Create Script Variables for parameters:
+   - `MaxRecordingMinutes` (Number, default: 5)
+   - `VideoBitrateMbps` (Number, default: 5)
+   - `RestartApp` (Checkbox, default: unchecked)
+5. Schedule to run once or on-demand when you need to update settings
+
+### When Changes Take Effect
+
+- **Without `-RestartApp`**: Changes apply next time the app starts
+- **With `-RestartApp`**: Changes apply immediately (app is restarted)
+
+### Workflow for Changing Settings Fleet-Wide
+
+1. Test the new setting on a single machine first
+2. Deploy via Ninja RMM to all machines
+3. Either wait for users to restart the app, or use `-RestartApp`
 
 ---
 
