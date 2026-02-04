@@ -419,6 +419,9 @@ async function setupMultiMonitorCapture(
     throw new Error('Failed to capture any screens for compositing');
   }
 
+  // Calculate the maximum height across all displays for vertical centering
+  const maxDisplayHeight = Math.max(...sortedDisplays.map(d => d.height));
+  
   // Start rendering loop to composite all screens
   const renderFrame = () => {
     if (!compositeCtx || !compositeCanvas) return;
@@ -427,11 +430,13 @@ async function setupMultiMonitorCapture(
     compositeCtx.fillStyle = '#000';
     compositeCtx.fillRect(0, 0, compositeCanvas.width, compositeCanvas.height);
     
-    // Draw each video at its display position
+    // Draw each video at its display position, centered vertically
     for (const video of videoElements) {
       const display = (video as any)._displayInfo as DisplayInfo;
       if (display && video.readyState >= 2) {
-        compositeCtx.drawImage(video, display.x, display.y, display.width, display.height);
+        // Center vertically: offset by half the difference between max height and this display's height
+        const verticalOffset = Math.floor((maxDisplayHeight - display.height) / 2);
+        compositeCtx.drawImage(video, display.x, display.y + verticalOffset, display.width, display.height);
       }
     }
     
