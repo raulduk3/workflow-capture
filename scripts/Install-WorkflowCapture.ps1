@@ -36,7 +36,7 @@ param(
     [string]$InstallerUrl = "",
     
     [Parameter(Mandatory=$false)]
-    [string]$InstallerFileName = "L7S-Workflow-Capture-1.1.1-x64.exe",
+    [string]$InstallerFileName = "L7S-Workflow-Capture-1.1.2-x64.exe",
     
     [Parameter(Mandatory=$false)]
     [switch]$Force = $false
@@ -48,7 +48,7 @@ param(
 
 $AppName = "L7S Workflow Capture"
 $AppPublisher = "Layer 7 Systems"
-$ReleaseVersion = "v1.1.1"
+$ReleaseVersion = "v1.1.2"
 $GitHubRepo = "raulduk3/workflow-capture"
 $GitHubReleaseUrl = "https://github.com/$GitHubRepo/releases/download/$ReleaseVersion/$InstallerFileName"
 $InstallPath = "${env:ProgramFiles}\Workflow Capture"
@@ -265,15 +265,18 @@ function Install-Application {
     # Note: /D must be the LAST parameter and path must NOT be quoted
     $targetDir = "C:\Program Files\Workflow Capture"
     
-    # Build argument string - /D= must be last and path unquoted
-    $argumentString = "/S /D=$targetDir"
+    # Build argument list as array for proper handling of spaces
+    # Using ArgumentList as array avoids quoting issues
+    $arguments = @("/S", "/D=$targetDir")
     
-    Write-Log "Installer arguments: $argumentString"
+    Write-Log "Installer path: $InstallerPath"
+    Write-Log "Installer arguments: $($arguments -join ' ')"
     Write-Log "Target directory: $targetDir"
     
     try {
+        # Use Start-Process with -ArgumentList as array
         $process = Start-Process -FilePath $InstallerPath `
-                                    -ArgumentList $argumentString `
+                                    -ArgumentList $arguments `
                                     -Wait `
                                     -PassThru `
                                     -NoNewWindow
@@ -281,9 +284,28 @@ function Install-Application {
         $exitCode = $process.ExitCode
         
         if ($exitCode -eq 0) {
-            Write-Log "Installation completed successfully" -Level "SUCCESS"
-            # Give the installer a moment to finalize file operations
-            Start-Sleep -Seconds 3
+            Write-Log "Installation completed (exit code 0)" -Level "SUCCESS"
+            
+            # Give the installer time to finalize file operations
+            Start-Sleep -Seconds 5
+            
+            # Log what exists at target directory
+            if (Test-Path $targetDir) {
+                Write-Log "Target directory exists: $targetDir" -Level "SUCCESS"
+                $contents = Get-ChildItem -Path $targetDir -ErrorAction SilentlyContinue | Select-Object -First 10
+                foreach ($item in $contents) {
+                    Write-Log "  - $($item.Name)"
+                }
+            } else {
+                Write-Log "Target directory does NOT exist after install: $targetDir" -Level "WARN"
+                # Check if install went to a different location
+                $programFilesContents = Get-ChildItem "C:\Program Files" -Directory -ErrorAction SilentlyContinue | 
+                    Where-Object { $_.Name -like "*Workflow*" -or $_.Name -like "*L7S*" -or $_.Name -like "*Capture*" }
+                foreach ($dir in $programFilesContents) {
+                    Write-Log "  Found related dir: $($dir.FullName)" -Level "INFO"
+                }
+            }
+            
             return $true
         } else {
             Write-Log "Installation failed with exit code: $exitCode" -Level "ERROR"
@@ -815,11 +837,14 @@ function Test-Installation {
         "$InstallPath\Workflow Capture.exe",
         "${env:ProgramFiles}\Workflow Capture\Workflow Capture.exe",
         "${env:ProgramFiles(x86)}\Workflow Capture\Workflow Capture.exe",
+        "C:\Program Files\Workflow Capture\Workflow Capture.exe",
+        "C:\Program Files (x86)\Workflow Capture\Workflow Capture.exe",
         # SYSTEM account per-user paths (where old installer puts it when run as SYSTEM)
         "$env:LOCALAPPDATA\Programs\l7s-workflow-capture\Workflow Capture.exe",
         "$env:LOCALAPPDATA\Programs\workflow-capture\Workflow Capture.exe",
         "C:\Windows\System32\config\systemprofile\AppData\Local\Programs\l7s-workflow-capture\Workflow Capture.exe",
-        "C:\Windows\System32\config\systemprofile\AppData\Local\Programs\workflow-capture\Workflow Capture.exe"
+        "C:\Windows\System32\config\systemprofile\AppData\Local\Programs\workflow-capture\Workflow Capture.exe",
+        "C:\Windows\System32\config\systemprofile\AppData\Local\Programs\Workflow Capture\Workflow Capture.exe"
     )
     
     # Also check all user profiles
@@ -841,24 +866,41 @@ function Test-Installation {
         }
     }
     
-    # Recursive search as fallback
+    # Recursive search as fallback - search broad locations
     Write-Log "Searching recursively for executable..."
     $searchPaths = @(
-        "$InstallPath",
-        "${env:ProgramFiles}\Workflow Capture",
-        "${env:ProgramFiles(x86)}\Workflow Capture",
+        "C:\Program Files",
+        "C:\Program Files (x86)",
         "$env:LOCALAPPDATA\Programs",
         "C:\Windows\System32\config\systemprofile\AppData\Local\Programs"
     )
     
+    # Add all user local programs folders
+    foreach ($profile in $userProfiles) {
+        $searchPaths += "$($profile.FullName)\AppData\Local\Programs"
+    }
+    
     foreach ($searchPath in $searchPaths) {
         if (Test-Path $searchPath) {
+            Write-Log "  Scanning: $searchPath"
             $foundExe = Get-ChildItem -Path $searchPath -Filter "Workflow Capture.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($foundExe) {
                 Write-Log "Found executable: $($foundExe.FullName)" -Level "SUCCESS"
                 Write-Log "  Version: $($foundExe.VersionInfo.FileVersion)"
                 return $foundExe.FullName
             }
+        }
+    }
+    
+    # Last resort: Check what directories exist under Program Files with "Workflow" in name
+    Write-Log "Checking for any Workflow-related directories..." -Level "WARN"
+    $workflowDirs = Get-ChildItem -Path "C:\Program Files", "C:\Program Files (x86)" -Directory -ErrorAction SilentlyContinue | 
+        Where-Object { $_.Name -like "*Workflow*" -or $_.Name -like "*L7S*" }
+    foreach ($dir in $workflowDirs) {
+        Write-Log "  Found directory: $($dir.FullName)" -Level "INFO"
+        $exe = Get-ChildItem -Path $dir.FullName -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($exe) {
+            Write-Log "    Contains: $($exe.Name)"
         }
     }
     

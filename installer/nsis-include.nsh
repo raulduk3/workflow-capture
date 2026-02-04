@@ -33,8 +33,9 @@
 !macroend
 
 !macro customInstallMode
-    ; Per-machine installation (all users) - required for NinjaRMM/SYSTEM deployments
-    ; Remove per-user forcing to allow proper Program Files installation
+    ; Force per-machine installation (all users) - required for NinjaRMM/SYSTEM deployments
+    ; This overrides any default behavior and ensures install to Program Files
+    SetShellVarContext all
 !macroend
 
 !macro customUnInstall
