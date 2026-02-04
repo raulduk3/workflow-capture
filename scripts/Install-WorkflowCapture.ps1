@@ -36,7 +36,7 @@ param(
     [string]$InstallerUrl = "",
     
     [Parameter(Mandatory=$false)]
-    [string]$InstallerFileName = "L7S-Workflow-Capture-1.1.0-x64.exe",
+    [string]$InstallerFileName = "L7S-Workflow-Capture-1.1.1-x64.exe",
     
     [Parameter(Mandatory=$false)]
     [switch]$Force = $false
@@ -48,7 +48,7 @@ param(
 
 $AppName = "L7S Workflow Capture"
 $AppPublisher = "Layer 7 Systems"
-$ReleaseVersion = "v1.1.0"
+$ReleaseVersion = "v1.1.1"
 $GitHubRepo = "raulduk3/workflow-capture"
 $GitHubReleaseUrl = "https://github.com/$GitHubRepo/releases/download/$ReleaseVersion/$InstallerFileName"
 $InstallPath = "${env:ProgramFiles}\Workflow Capture"
@@ -806,17 +806,32 @@ INSTALLATION DETAILS:
 
 function Test-Installation {
     # Verify installation by finding the executable
-    # Focus on Program Files paths only (per-machine install target)
+    # Check all possible locations - installer may have gone to per-user or per-machine
     Start-Sleep -Seconds 2
     
-    # Check Program Files paths first (primary install location for per-machine)
+    # Build comprehensive list of possible paths
     $possiblePaths = @(
+        # Per-machine paths (preferred)
         "$InstallPath\Workflow Capture.exe",
         "${env:ProgramFiles}\Workflow Capture\Workflow Capture.exe",
-        "${env:ProgramFiles(x86)}\Workflow Capture\Workflow Capture.exe"
+        "${env:ProgramFiles(x86)}\Workflow Capture\Workflow Capture.exe",
+        # SYSTEM account per-user paths (where old installer puts it when run as SYSTEM)
+        "$env:LOCALAPPDATA\Programs\l7s-workflow-capture\Workflow Capture.exe",
+        "$env:LOCALAPPDATA\Programs\workflow-capture\Workflow Capture.exe",
+        "C:\Windows\System32\config\systemprofile\AppData\Local\Programs\l7s-workflow-capture\Workflow Capture.exe",
+        "C:\Windows\System32\config\systemprofile\AppData\Local\Programs\workflow-capture\Workflow Capture.exe"
     )
     
-    Write-Log "Checking installation paths (Program Files)..."
+    # Also check all user profiles
+    $userProfiles = Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue | 
+        Where-Object { $_.Name -notin @("Public", "Default", "Default User", "All Users") }
+    foreach ($profile in $userProfiles) {
+        $possiblePaths += "$($profile.FullName)\AppData\Local\Programs\l7s-workflow-capture\Workflow Capture.exe"
+        $possiblePaths += "$($profile.FullName)\AppData\Local\Programs\workflow-capture\Workflow Capture.exe"
+        $possiblePaths += "$($profile.FullName)\AppData\Local\Programs\Workflow Capture\Workflow Capture.exe"
+    }
+    
+    Write-Log "Checking installation paths..."
     foreach ($path in $possiblePaths) {
         if (Test-Path $path) {
             $fileInfo = Get-Item $path
@@ -826,9 +841,15 @@ function Test-Installation {
         }
     }
     
-    # Recursive search in Program Files as fallback
-    Write-Log "Searching recursively in Program Files..."
-    $searchPaths = @("$InstallPath", "${env:ProgramFiles}\Workflow Capture", "${env:ProgramFiles(x86)}\Workflow Capture")
+    # Recursive search as fallback
+    Write-Log "Searching recursively for executable..."
+    $searchPaths = @(
+        "$InstallPath",
+        "${env:ProgramFiles}\Workflow Capture",
+        "${env:ProgramFiles(x86)}\Workflow Capture",
+        "$env:LOCALAPPDATA\Programs",
+        "C:\Windows\System32\config\systemprofile\AppData\Local\Programs"
+    )
     
     foreach ($searchPath in $searchPaths) {
         if (Test-Path $searchPath) {
@@ -841,7 +862,7 @@ function Test-Installation {
         }
     }
     
-    Write-Log "Could not verify installation - executable not found in Program Files" -Level "ERROR"
+    Write-Log "Could not verify installation - executable not found" -Level "ERROR"
     return $null
 }
 
