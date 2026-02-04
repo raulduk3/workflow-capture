@@ -423,6 +423,13 @@ async function setupMultiMonitorCapture(
   // Calculate the maximum height across all displays for vertical centering
   const maxDisplayHeight = Math.max(...sortedDisplays.map(d => d.height));
   
+  // Log centering calculations for debugging
+  console.log(`[Renderer] Max display height for centering: ${maxDisplayHeight}`);
+  sortedDisplays.forEach((d, i) => {
+    const verticalOffset = Math.floor((maxDisplayHeight - d.height) / 2);
+    console.log(`[Renderer] Display ${i}: ${d.width}x${d.height} at x=${d.x}, verticalOffset=${verticalOffset}`);
+  });
+  
   // Start rendering loop to composite all screens
   const renderFrame = () => {
     if (!compositeCtx || !compositeCanvas) return;
@@ -432,12 +439,14 @@ async function setupMultiMonitorCapture(
     compositeCtx.fillRect(0, 0, compositeCanvas.width, compositeCanvas.height);
     
     // Draw each video at its display position, centered vertically
+    // We use display.x for horizontal position but IGNORE display.y
+    // Instead, we center each monitor vertically based on the max height
     for (const video of videoElements) {
       const display = (video as any)._displayInfo as DisplayInfo;
       if (display && video.readyState >= 2) {
-        // Center vertically: offset by half the difference between max height and this display's height
+        // Center vertically: place at offset so all monitors are centered regardless of OS Y position
         const verticalOffset = Math.floor((maxDisplayHeight - display.height) / 2);
-        compositeCtx.drawImage(video, display.x, display.y + verticalOffset, display.width, display.height);
+        compositeCtx.drawImage(video, display.x, verticalOffset, display.width, display.height);
       }
     }
     
