@@ -114,8 +114,10 @@ export class NativeRecorder {
       minY = Math.min(minY, d.bounds.y);
     }
     
+    // Include display.id for matching with screen sources
     const displayInfo = displays.map((d, i) => ({
       index: i,
+      id: d.id,
       x: d.bounds.x - minX,
       y: d.bounds.y - minY,
       width: d.bounds.width,
@@ -124,7 +126,7 @@ export class NativeRecorder {
     }));
     
     displayInfo.forEach((d) => {
-      this.log(`  Display ${d.index}: ${d.width}x${d.height} at (${d.x}, ${d.y}), scaleFactor: ${d.scaleFactor}`);
+      this.log(`  Display ${d.index} (id=${d.id}): ${d.width}x${d.height} at (${d.x}, ${d.y}), scaleFactor: ${d.scaleFactor}`);
     });
 
     // Find the best source for multi-screen capture:
@@ -172,11 +174,22 @@ export class NativeRecorder {
     this.log(`Output WebM: ${this.outputWebmPath}`);
 
     // Build list of all screen sources for Windows multi-monitor compositing
+    // Include the display index extracted from the source ID (e.g., "screen:0:0" -> index 0)
     const allScreenSources = needsCompositing 
       ? sources
           .filter(s => s.id.startsWith('screen:'))
-          .map(s => ({ id: s.id, name: s.name }))
+          .map(s => {
+            // Extract display index from source ID: "screen:INDEX:0" format
+            const match = s.id.match(/^screen:(\d+):/);
+            const displayIndex = match ? parseInt(match[1], 10) : -1;
+            return { id: s.id, name: s.name, displayIndex };
+          })
       : [];
+    
+    this.log(`Screen sources for compositing: ${allScreenSources.length}`);
+    allScreenSources.forEach(s => {
+      this.log(`  Source: ${s.name} (${s.id}) -> displayIndex: ${s.displayIndex}`);
+    });
 
     // Send start command to renderer with source ID and canvas dimensions for multi-monitor support
     mainWindow.webContents.send('start-capture', {

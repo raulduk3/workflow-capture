@@ -13,6 +13,7 @@ interface SystemStatus {
 
 interface DisplayInfo {
   index: number;
+  id: number;  // Electron display ID for matching
   x: number;
   y: number;
   width: number;
@@ -23,6 +24,7 @@ interface DisplayInfo {
 interface ScreenSource {
   id: string;
   name: string;
+  displayIndex: number;  // Index extracted from source ID for matching
 }
 
 interface CaptureConfig {
@@ -393,15 +395,42 @@ async function setupMultiMonitorCapture(
     throw new Error('Failed to create canvas context for compositing');
   }
 
-  // Sort displays by their index to match source order
-  const sortedDisplays = [...displays].sort((a, b) => a.index - b.index);
+  // Create a map of display index to display info for proper matching
+  const displayByIndex = new Map<number, DisplayInfo>();
+  for (const d of displays) {
+    displayByIndex.set(d.index, d);
+  }
   
-  // Capture each screen
-  for (let i = 0; i < sources.length && i < sortedDisplays.length; i++) {
-    const source = sources[i];
-    const display = sortedDisplays[i];
+  console.log(`[Renderer] Display map created with ${displayByIndex.size} displays`);
+  displays.forEach(d => {
+    console.log(`[Renderer]   Display index ${d.index} (id=${d.id}): ${d.width}x${d.height} at (${d.x}, ${d.y})`);
+  });
+  
+  // Capture each screen, matching source to display by displayIndex
+  for (const source of sources) {
+    // Find the matching display for this source
+    let display = displayByIndex.get(source.displayIndex);
     
-    console.log(`[Renderer] Capturing screen ${i}: ${source.name} -> position (${display.x}, ${display.y})`);
+    // Fallback: if displayIndex doesn't match, try to find by order
+    if (!display) {
+      console.warn(`[Renderer] No display found for source displayIndex ${source.displayIndex}, trying fallback`);
+      // Use the first unmatched display as fallback
+      const usedIndices = new Set(sources.filter(s => displayByIndex.has(s.displayIndex)).map(s => s.displayIndex));
+      for (const d of displays) {
+        if (!usedIndices.has(d.index)) {
+          display = d;
+          console.log(`[Renderer] Using fallback display index ${d.index} for source ${source.name}`);
+          break;
+        }
+      }
+    }
+    
+    if (!display) {
+      console.error(`[Renderer] Could not find display for source: ${source.name} (${source.id})`);
+      continue;
+    }
+    
+    console.log(`[Renderer] Capturing source ${source.name} (displayIndex=${source.displayIndex}) -> display at (${display.x}, ${display.y})`);
     
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -435,9 +464,10 @@ async function setupMultiMonitorCapture(
       await video.play();
       
       const settings = stream.getVideoTracks()[0]?.getSettings();
-      console.log(`[Renderer] Screen ${i} capture resolution: ${settings?.width}x${settings?.height}`);
+      console.log(`[Renderer] Screen ${source.name} capture resolution: ${settings?.width}x${settings?.height}`);
     } catch (err) {
-      console.error(`[Renderer] Failed to capture screen ${i}:`, err);
+      console.error(`[Renderer] Failed to capture screen ${source.name} (${source.id}):`, err);
+      // Continue to next screen - don't fail the entire capture
     }
   }
 
@@ -445,14 +475,16 @@ async function setupMultiMonitorCapture(
     throw new Error('Failed to capture any screens for compositing');
   }
 
-  // Calculate the maximum height across all displays for vertical centering
-  const maxDisplayHeight = Math.max(...sortedDisplays.map(d => d.height));
+  // Calculate the maximum height across all captured displays for vertical centering
+  const capturedDisplays = videoElements.map(v => (v as any)._displayInfo as DisplayInfo).filter(d => d);
+  const maxDisplayHeight = Math.max(...capturedDisplays.map(d => d.height));
   
   // Log centering calculations for debugging
+  console.log(`[Renderer] Successfully captured ${videoElements.length} screens`);
   console.log(`[Renderer] Max display height for centering: ${maxDisplayHeight}`);
-  sortedDisplays.forEach((d, i) => {
+  capturedDisplays.forEach((d, i) => {
     const verticalOffset = Math.floor((maxDisplayHeight - d.height) / 2);
-    console.log(`[Renderer] Display ${i}: ${d.width}x${d.height} at x=${d.x}, verticalOffset=${verticalOffset}`);
+    console.log(`[Renderer] Captured display ${i}: ${d.width}x${d.height} at x=${d.x}, verticalOffset=${verticalOffset}`);
   });
   
   // Start rendering loop to composite all screens
