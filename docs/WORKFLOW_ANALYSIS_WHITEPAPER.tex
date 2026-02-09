@@ -1,0 +1,96 @@
+\documentclass[9pt]{article}
+\usepackage[top=0.4in, bottom=0.4in, left=0.5in, right=0.5in]{geometry}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{array}
+\setlength{\parskip}{5pt}
+\setlength{\parindent}{0pt}
+\setlist[itemize]{noitemsep, topsep=1pt, leftmargin=1.2em}
+\pagenumbering{gobble}
+
+\begin{document}
+
+{\bfseries\large Workflow Video Analysis Pipeline: Identifying AI Automation Opportunities}\hfill{\small Layer 7 Systems — February 2026}
+
+\medskip
+
+\textbf{Objective.}
+Identify tasks across the organization that are strong candidates for AI-assisted automation (Gemini, prompts, integrations). Employees record workflows via L7S Workflow Capture; this pipeline extracts structured data from those recordings to surface \textbf{what work looks like}, \textbf{where time is spent}, and \textbf{which tasks are repetitive, predictable, or painful enough to automate}.
+
+\textbf{Problem.}
+We don't know which tasks are good automation candidates. Employees have intuitions, but we lack data. Video recordings show real workflows—but we can't watch them all. We need to convert raw footage into structured, queryable evidence that reveals where AI can add value.
+
+\textbf{Solution.}
+A pipeline converting each video into one row of structured data: (1) parse filename metadata, (2) extract 35 frames via ffmpeg, (3) analyze frames with Gemini Vision API, (4) append results to CSV. The dataset surfaces automation opportunities through patterns in actions, app usage, and workflow structure.
+
+\textbf{Feature Space (19 fields per video):}
+
+\smallskip
+{\footnotesize
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Source} & \textbf{Description} \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{From Filename}} \\
+\texttt{video\_id} & string & derived & Unique hash for dedup \\
+\texttt{username} & string & folder & Who recorded \\
+\texttt{timestamp} & datetime & filename & When started \\
+\texttt{machine\_id} & string & filename & Workstation \\
+\texttt{task\_description} & string & filename & User's stated task \\
+\texttt{day\_of\_week}, \texttt{hour\_of\_day} & string, int & derived & Temporal patterns \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{From Video File}} \\
+\texttt{duration\_sec} & int & ffprobe & Recording length \\
+\texttt{file\_size\_mb} & float & filesystem & Activity proxy \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{From Gemini Vision}} \\
+\texttt{primary\_app} & string & Gemini & Most-used application \\
+\texttt{app\_sequence} & JSON & Gemini & Ordered list of apps \\
+\texttt{detected\_actions} & JSON & Gemini & Actions (data entry, copy-paste, etc.) \\
+\texttt{friction\_events} & JSON & Gemini & Pain points (errors, repeated steps) \\
+\texttt{friction\_count} & int & derived & Number of friction events \\
+\texttt{automation\_score} & float 0–1 & Gemini & AI automation potential \\
+\texttt{workflow\_category} & string & Gemini & Task classification \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{From ActivTrak (joined by username + date)}} \\
+\texttt{activtrak\_productive\_pct} & float & ActivTrak & Productivity ratio \\
+\texttt{activtrak\_idle\_min} & int & ActivTrak & Idle/wait time \\
+\texttt{activtrak\_top\_apps} & JSON & ActivTrak & Top apps by time \\
+\bottomrule
+\end{tabular}
+}
+
+\smallskip
+\textbf{ML Readiness.} All fields usable: numeric fields directly; categorical strings via label encoding; JSON arrays via multi-hot encoding (presence vectors) or count vectors. Task descriptions can be vectorized via TF-IDF or embeddings for semantic clustering.
+
+\textbf{What This Enables.}
+Standard ML to find automation candidates: \textbf{clustering} groups similar workflows (same task across users); \textbf{classification} tags by type/department; \textbf{ranking} by automation\_score + friction\_count surfaces top opportunities; \textbf{correlation} links workflow patterns to productivity. No custom model training—just structured queries and off-the-shelf algorithms.
+
+\textbf{Key Questions Answered.}
+Which tasks are highly repetitive? Which involve manual data transfer between apps? Which tasks do multiple users perform the same way (standardizable)? Which have high friction that AI could eliminate? Where do users spend time on work Gemini could assist with (summarization, lookup, generation)?
+
+\textbf{Non-Goals.}
+This produces data and recommendations, not automation itself. Output is a dataset and insights report identifying where to deploy AI tools—decisions remain human.
+
+\textbf{Cost.} ~\$3.50/day at 100 videos (~\$105/month). \textbf{Timeline.} 7 days to pipeline + first insights report.
+
+\textbf{Deliverable.}
+(1) Automated pipeline, (2) populated dataset, (3) report ranking automation opportunities with evidence: which tasks, which users, how often, estimated impact.
+
+\vfill
+{\small\itshape Prepared by Richard Alvarez — Layer 7 Systems ML Engineering}
+
+\end{document}
+Once we have structured data, we can run standard analysis without building custom models:
+\begin{itemize}
+\item \textbf{Clustering} — Find groups of similar workflows (e.g., "invoice processing" tasks that look alike across users)
+\item \textbf{Anomaly detection} — Surface outliers with unusually high friction or duration
+\item \textbf{Classification} — Tag workflows by department, application, or task type
+\item \textbf{Correlation} — Compare video observations against ActivTrak productivity scores
+\end{itemize}
+
+\textbf{Cost \& Timeline.}
+Gemini API: ~\$3.50/day at 100 videos. Monthly: ~\$105. Storage: negligible. Timeline: 7 days to working pipeline and first insights report.
+
+\end{document}
