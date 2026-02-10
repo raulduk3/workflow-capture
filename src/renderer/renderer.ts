@@ -550,6 +550,12 @@ function stopCapture(): void {
   console.log('[Renderer] Stopping capture...');
   
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    // CRITICAL: Request any pending data before stopping
+    // Without this, the last partial chunk (up to 1 second) is lost,
+    // causing incomplete/corrupted recordings
+    if (mediaRecorder.state === 'recording') {
+      mediaRecorder.requestData();
+    }
     mediaRecorder.stop();
   }
 }

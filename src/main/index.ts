@@ -733,6 +733,23 @@ function setupIpcHandlers(): void {
   // Note: For large recordings, this can receive hundreds of MB of data
   ipcMain.handle('save-recording-chunk', async (_event, chunk: ArrayBuffer, outputPath: string) => {
     try {
+      // SECURITY: Validate that outputPath is within the allowed sessions directory
+      // This prevents path traversal attacks from a compromised renderer
+      if (!fileManager) {
+        throw new Error('File manager not initialized');
+      }
+      
+      const sessionsPath = fileManager.getSessionsPath();
+      const resolvedOutput = path.resolve(outputPath);
+      const resolvedSessions = path.resolve(sessionsPath);
+      
+      // Ensure the output path starts with the sessions directory
+      // and ends with .webm extension
+      if (!resolvedOutput.startsWith(resolvedSessions + path.sep) || !resolvedOutput.endsWith('.webm')) {
+        log(`SECURITY: Rejected invalid output path: ${outputPath}`);
+        throw new Error('Invalid output path - must be within sessions directory');
+      }
+      
       log(`Saving recording to ${outputPath} (${(chunk.byteLength / 1024 / 1024).toFixed(2)} MB)`);
       // Use writeFile instead of appendFile since we receive the complete recording
       fs.writeFileSync(outputPath, Buffer.from(chunk));
