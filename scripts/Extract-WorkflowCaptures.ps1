@@ -146,21 +146,23 @@ function Copy-Recordings {
     
     Write-Log "Processing recordings from: $sessionsPath"
     
-    # Get all .webm files
-    $recordings = Get-ChildItem $sessionsPath -Filter "*.webm" -File -ErrorAction SilentlyContinue
+    # Get all .webm files (exclude .webm.tmp files which are actively being written)
+    $recordings = Get-ChildItem $sessionsPath -Filter "*.webm" -File -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Name -notlike "*.tmp" }
     
     if (-not $recordings -or $recordings.Count -eq 0) {
         Write-Log "No recordings found"
         return $null
     }
     
-    # Filter out files that might be actively recording (modified in last 2 minutes)
-    $cutoffTime = (Get-Date).AddMinutes(-2)
+    # Filter out files that might be actively recording (modified in last 10 minutes)
+    # 10-minute window accounts for: large file writes, slow disks, timeout race conditions
+    $cutoffTime = (Get-Date).AddMinutes(-10)
     $safeRecordings = $recordings | Where-Object { $_.LastWriteTime -lt $cutoffTime }
     $skippedCount = $recordings.Count - $safeRecordings.Count
     
     if ($skippedCount -gt 0) {
-        Write-Log "Skipping $skippedCount file(s) that may be actively recording (modified < 2 min ago)"
+        Write-Log "Skipping $skippedCount file(s) that may be actively recording (modified < 10 min ago)"
     }
     
     if (-not $safeRecordings -or $safeRecordings.Count -eq 0) {
@@ -168,8 +170,43 @@ function Copy-Recordings {
         return $null
     }
     
-    $totalSize = ($safeRecordings | Measure-Object -Property Length -Sum).Sum
-    Write-Log "Found $($safeRecordings.Count) recording(s) ready for extraction ($('{0:N2}' -f ($totalSize / 1MB)) MB)"
+    # Validate recordings - check file size > 0 and WebM header magic bytes (1A 45 DF A3)
+    $validRecordings = @()
+    foreach ($rec in $safeRecordings) {
+        if ($rec.Length -eq 0) {
+            Write-Log "Skipping empty file: $($rec.Name)"
+            continue
+        }
+        try {
+            $header = [byte[]]::new(4)
+            $stream = [System.IO.File]::OpenRead($rec.FullName)
+            $bytesRead = $stream.Read($header, 0, 4)
+            $stream.Close()
+            
+            if ($bytesRead -lt 4 -or $header[0] -ne 0x1A -or $header[1] -ne 0x45 -or $header[2] -ne 0xDF -or $header[3] -ne 0xA3) {
+                Write-Log "Skipping invalid/corrupt file (bad WebM header): $($rec.Name)"
+                continue
+            }
+            $validRecordings += $rec
+        } catch {
+            Write-Log "WARNING: Could not validate $($rec.Name): $_"
+            # Include it anyway if we can't read the header
+            $validRecordings += $rec
+        }
+    }
+    
+    $invalidCount = $safeRecordings.Count - $validRecordings.Count
+    if ($invalidCount -gt 0) {
+        Write-Log "Filtered out $invalidCount invalid/corrupt recording(s)"
+    }
+    
+    if ($validRecordings.Count -eq 0) {
+        Write-Log "No valid recordings to process after validation"
+        return $null
+    }
+    
+    $totalSize = ($validRecordings | Measure-Object -Property Length -Sum).Sum
+    Write-Log "Found $($validRecordings.Count) recording(s) ready for extraction ($('{0:N2}' -f ($totalSize / 1MB)) MB)"
     
     # Create destination folder using USERNAME
     $userFolder = Join-Path $DestinationBase $env:USERNAME
@@ -182,7 +219,7 @@ function Copy-Recordings {
     $copiedCount = 0
     $copiedFiles = @()
     
-    foreach ($recording in $safeRecordings) {
+    foreach ($recording in $validRecordings) {
         $destPath = Join-Path $userFolder $recording.Name
         
         try {
@@ -231,6 +268,24 @@ Write-Log "Archive: $(Get-ArchivePath)"
 Write-Log "Destination: $DestinationPath\$env:USERNAME"
 Write-Log "Note: Local recordings will be zipped and archived after upload"
 Write-Log "=========================================="
+
+# Clean up stale .webm.tmp files (incomplete recordings from crashed sessions)
+$sessionsPathForCleanup = Get-SessionsPath
+if (Test-Path $sessionsPathForCleanup) {
+    $staleTmpCutoff = (Get-Date).AddMinutes(-30)
+    $staleTmpFiles = Get-ChildItem $sessionsPathForCleanup -Filter "*.webm.tmp" -File -ErrorAction SilentlyContinue |
+                     Where-Object { $_.LastWriteTime -lt $staleTmpCutoff }
+    if ($staleTmpFiles -and $staleTmpFiles.Count -gt 0) {
+        foreach ($tmpFile in $staleTmpFiles) {
+            try {
+                Remove-Item -Path $tmpFile.FullName -Force
+                Write-Log "Cleaned up stale temp file: $($tmpFile.Name)"
+            } catch {
+                Write-Log "WARNING: Could not clean up $($tmpFile.Name): $_"
+            }
+        }
+    }
+}
 
 # Validate destination
 if (-not (Test-Path $DestinationPath)) {

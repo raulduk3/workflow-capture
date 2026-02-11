@@ -14,12 +14,14 @@ export interface ElectronAPI {
   stopRecording: () => Promise<IpcResult>;
   getStatus: () => Promise<SystemStatus>;
   openSessionsFolder: () => Promise<IpcResult>;
-  exportSessions: () => Promise<IpcResult>;
   saveRecordingData: (data: ArrayBuffer, outputPath: string) => Promise<IpcResult>;
+  appendRecordingChunk: (data: ArrayBuffer, outputPath: string) => Promise<IpcResult>;
+  finalizeRecording: (outputPath: string) => Promise<IpcResult>;
   notifyCaptureStopped: (result: CaptureStoppedResult) => Promise<void>;
   onStatusUpdate: (callback: (status: SystemStatus) => void) => () => void;
   onStartCapture: (callback: (config: CaptureConfig) => void) => () => void;
   onStopCapture: (callback: () => void) => () => void;
+  onAbortCapture: (callback: () => void) => () => void;
   onRecordingSaved: (callback: (filename: string) => void) => () => void;
   onFocusTaskInput: (callback: () => void) => () => void;
 }
@@ -29,9 +31,12 @@ const electronAPI: ElectronAPI = {
   stopRecording: () => ipcRenderer.invoke('stop-recording'),
   getStatus: () => ipcRenderer.invoke('get-status'),
   openSessionsFolder: () => ipcRenderer.invoke('open-sessions-folder'),
-  exportSessions: () => ipcRenderer.invoke('export-sessions'),
   saveRecordingData: (data: ArrayBuffer, outputPath: string) => 
     ipcRenderer.invoke('save-recording-chunk', data, outputPath),
+  appendRecordingChunk: (data: ArrayBuffer, outputPath: string) =>
+    ipcRenderer.invoke('append-recording-chunk', data, outputPath),
+  finalizeRecording: (outputPath: string) =>
+    ipcRenderer.invoke('finalize-recording', outputPath),
   notifyCaptureStopped: (result: CaptureStoppedResult) => 
     ipcRenderer.invoke('capture-stopped', result),
   
@@ -57,6 +62,14 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.on('stop-capture', handler);
     return () => {
       ipcRenderer.removeListener('stop-capture', handler);
+    };
+  },
+
+  onAbortCapture: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('abort-capture', handler);
+    return () => {
+      ipcRenderer.removeListener('abort-capture', handler);
     };
   },
   

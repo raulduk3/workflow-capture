@@ -26,6 +26,20 @@ export interface IpcResult {
 export interface CaptureConfig {
   sourceId: string;
   outputPath: string;
+  canvasWidth?: number;
+  canvasHeight?: number;
+  videoBitrate?: number;
+  needsCompositing?: boolean;
+  allScreenSources?: Array<{ id: string; name: string; displayIndex: number }>;
+  displayInfo?: Array<{
+    index: number;
+    id: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    scaleFactor: number;
+  }>;
 }
 
 /** Result from capture stop operation */

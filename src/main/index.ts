@@ -330,7 +330,7 @@ async function toggleRecording(): Promise<void> {
       
       const recordingPath = await sessionManager.startSession('');
       nativeRecorder.setOutputPath(recordingPath);
-      await nativeRecorder.startRecording(mainWindow);
+      await nativeRecorder.startRecording(mainWindow, getVideoBitrate());
       
       startRecordingTimer();
       sendStatus({ state: 'recording', message: 'Recording', recordingDuration: 0 });
@@ -630,8 +630,8 @@ function setupIpcHandlers(): void {
       // Set full recording path
       nativeRecorder.setOutputPath(recordingPath);
       
-      // Start recording
-      await nativeRecorder.startRecording(mainWindow);
+      // Start recording - pass video bitrate from config
+      await nativeRecorder.startRecording(mainWindow, getVideoBitrate());
       
       startRecordingTimer();
       sendStatus({ state: 'recording', message: 'Recording', recordingDuration: 0 });
@@ -758,6 +758,71 @@ function setupIpcHandlers(): void {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       log(`Failed to save recording: ${errorMessage}`);
+      return { success: false, error: errorMessage };
+    }
+  });
+
+  // Handle incremental chunk appends - writes each chunk to a .webm.tmp file
+  ipcMain.handle('append-recording-chunk', async (_event, chunk: ArrayBuffer, outputPath: string) => {
+    try {
+      if (!fileManager) {
+        throw new Error('File manager not initialized');
+      }
+      
+      const sessionsPath = fileManager.getSessionsPath();
+      const tmpPath = outputPath + '.tmp';
+      const resolvedOutput = path.resolve(tmpPath);
+      const resolvedSessions = path.resolve(sessionsPath);
+      
+      if (!resolvedOutput.startsWith(resolvedSessions + path.sep)) {
+        log(`SECURITY: Rejected invalid output path: ${outputPath}`);
+        throw new Error('Invalid output path - must be within sessions directory');
+      }
+      
+      // Append chunk to temp file
+      fs.appendFileSync(tmpPath, Buffer.from(chunk));
+      return { success: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      log(`Failed to append recording chunk: ${errorMessage}`);
+      return { success: false, error: errorMessage };
+    }
+  });
+
+  // Finalize recording - rename .webm.tmp to .webm
+  ipcMain.handle('finalize-recording', async (_event, outputPath: string) => {
+    try {
+      if (!fileManager) {
+        throw new Error('File manager not initialized');
+      }
+      
+      const sessionsPath = fileManager.getSessionsPath();
+      const tmpPath = outputPath + '.tmp';
+      const resolvedOutput = path.resolve(outputPath);
+      const resolvedSessions = path.resolve(sessionsPath);
+      
+      if (!resolvedOutput.startsWith(resolvedSessions + path.sep) || !resolvedOutput.endsWith('.webm')) {
+        log(`SECURITY: Rejected invalid output path: ${outputPath}`);
+        throw new Error('Invalid output path - must be within sessions directory');
+      }
+
+      if (!fs.existsSync(tmpPath)) {
+        throw new Error(`Temp recording file not found: ${tmpPath}`);
+      }
+
+      const tmpSize = fs.statSync(tmpPath).size;
+      if (tmpSize === 0) {
+        fs.unlinkSync(tmpPath);
+        throw new Error('Temp recording file is empty');
+      }
+
+      // Rename .webm.tmp -> .webm atomically
+      fs.renameSync(tmpPath, outputPath);
+      log(`Recording finalized: ${outputPath} (${(tmpSize / 1024 / 1024).toFixed(2)} MB)`);
+      return { success: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      log(`Failed to finalize recording: ${errorMessage}`);
       return { success: false, error: errorMessage };
     }
   });

@@ -80,7 +80,7 @@ export class NativeRecorder {
   /**
    * Start recording - signals renderer to begin capture
    */
-  public async startRecording(mainWindow: BrowserWindow): Promise<boolean> {
+  public async startRecording(mainWindow: BrowserWindow, videoBitrate?: number): Promise<boolean> {
     if (this.isRecording) {
       this.log('Already recording');
       return false;
@@ -197,6 +197,8 @@ export class NativeRecorder {
       outputPath: this.outputWebmPath,
       canvasWidth: canvasDimensions.width,
       canvasHeight: canvasDimensions.height,
+      // Video bitrate from config (passed through to MediaRecorder)
+      videoBitrate: videoBitrate || APP_CONSTANTS.VIDEO_BITRATE,
       // Windows multi-monitor compositing data
       needsCompositing,
       allScreenSources,
@@ -221,6 +223,10 @@ export class NativeRecorder {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.captureStoppedResolver = null;
+        this.log('Stop timeout reached - sending abort to renderer');
+        // Signal renderer to abort so it doesn't write a delayed orphaned file
+        mainWindow.webContents.send('abort-capture');
+        this.isRecording = false;
         reject(new Error('Timeout waiting for recording to stop'));
       }, APP_CONSTANTS.RECORDING_STOP_TIMEOUT_MS);
 

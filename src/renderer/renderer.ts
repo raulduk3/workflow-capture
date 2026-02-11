@@ -32,6 +32,7 @@ interface CaptureConfig {
   outputPath: string;
   canvasWidth?: number;  // Total width for multi-monitor capture
   canvasHeight?: number; // Total height for multi-monitor capture
+  videoBitrate?: number; // Video bitrate in bps from config
   // Windows multi-monitor compositing
   needsCompositing?: boolean;
   allScreenSources?: ScreenSource[];
@@ -39,8 +40,7 @@ interface CaptureConfig {
 }
 
 // Constants - Balanced for quality and compatibility
-// 5 Mbps provides good text readability while working on low-end hardware
-const VIDEO_BITRATE = 5_000_000; // 5 Mbps - Good quality, compatible with all hardware
+const DEFAULT_VIDEO_BITRATE = 5_000_000; // 5 Mbps fallback
 const CHUNK_INTERVAL_MS = 1000;
 
 // DOM Elements - use assertion after null check
@@ -55,7 +55,6 @@ const recordBtnText = document.getElementById('record-btn-text');
 const errorContainer = document.getElementById('error-container');
 const errorMessage = document.getElementById('error-message');
 const openFolderBtn = document.getElementById('open-folder-btn') as HTMLButtonElement | null;
-const exportBtn = document.getElementById('export-btn') as HTMLButtonElement | null;
 const toastNotification = document.getElementById('toast-notification');
 const toastMessage = document.getElementById('toast-message');
 
@@ -95,7 +94,7 @@ function validateDOMElements(): boolean {
   const requiredElements = [
     statusIndicator, statusText, timerDisplay, timer, 
     taskNote, recordBtn, recordBtnText, errorContainer, 
-    errorMessage, openFolderBtn, exportBtn
+    errorMessage, openFolderBtn
   ];
   
   const allPresent = requiredElements.every(el => el !== null);
@@ -124,8 +123,16 @@ let animationFrameId: number | null = null;
 let cleanupStatusListener: (() => void) | null = null;
 let cleanupStartCapture: (() => void) | null = null;
 let cleanupStopCapture: (() => void) | null = null;
+let cleanupAbortCapture: (() => void) | null = null;
 let cleanupRecordingSaved: (() => void) | null = null;
 let cleanupFocusTaskInput: (() => void) | null = null;
+
+// Track whether recording was aborted (timeout) vs normal stop
+let isAborted = false;
+// Track total bytes written to disk incrementally
+let totalBytesWritten = 0;
+// Chain chunk writes to prevent out-of-order or onstop race
+let pendingChunkWrite: Promise<void> = Promise.resolve();
 
 // Format duration as HH:MM:SS
 function formatDuration(seconds: number): string {
@@ -228,6 +235,12 @@ async function startCapture(config: CaptureConfig): Promise<void> {
   try {
     currentOutputPath = config.outputPath;
     recordedChunks = [];
+    isAborted = false;
+    totalBytesWritten = 0;
+
+    // Use bitrate from config, fallback to default
+    const videoBitrate = config.videoBitrate || DEFAULT_VIDEO_BITRATE;
+    console.log(`[Renderer] Using video bitrate: ${(videoBitrate / 1_000_000).toFixed(1)} Mbps`);
 
     let streamToRecord: MediaStream;
 
@@ -275,7 +288,7 @@ async function startCapture(config: CaptureConfig): Promise<void> {
     // VP9 requires dedicated hardware encoder or it's very slow
     const options: MediaRecorderOptions = {
       mimeType: 'video/webm;codecs=vp8',
-      videoBitsPerSecond: VIDEO_BITRATE,
+      videoBitsPerSecond: videoBitrate,
     };
 
     // Fallback codecs
@@ -293,49 +306,91 @@ async function startCapture(config: CaptureConfig): Promise<void> {
     mediaRecorder = new MediaRecorder(streamToRecord, options);
 
     mediaRecorder.ondataavailable = (event: BlobEvent) => {
-      if (event.data.size > 0) {
-        recordedChunks.push(event.data);
+      if (event.data.size > 0 && currentOutputPath && !isAborted) {
+        // Chain writes sequentially to guarantee ordering and prevent
+        // onstop from finalizing before the last chunk is flushed
+        const data = event.data;
+        const outPath = currentOutputPath;
+        pendingChunkWrite = pendingChunkWrite.then(async () => {
+          try {
+            const arrayBuffer = await data.arrayBuffer();
+            const result = await window.electronAPI.appendRecordingChunk(arrayBuffer, outPath);
+            if (result.success) {
+              totalBytesWritten += arrayBuffer.byteLength;
+            } else {
+              console.error('[Renderer] Failed to write chunk to disk:', result.error);
+              recordedChunks.push(data);
+            }
+          } catch (err) {
+            console.error('[Renderer] Error writing chunk:', err);
+            recordedChunks.push(data);
+          }
+        });
       }
     };
 
     mediaRecorder.onstop = async () => {
-      console.log('[Renderer] MediaRecorder stopped, saving file...');
-      console.log(`[Renderer] Recorded chunks: ${recordedChunks.length}, total size: ${recordedChunks.reduce((acc, chunk) => acc + chunk.size, 0)} bytes`);
+      console.log('[Renderer] MediaRecorder stopped, waiting for pending writes...');
+      
+      // CRITICAL: Wait for all in-flight chunk writes to complete before finalizing
+      // Without this, finalizeRecording could rename the .tmp file before the
+      // last ondataavailable chunk has been appended, losing the final second
+      try {
+        await pendingChunkWrite;
+      } catch (err) {
+        console.error('[Renderer] Error in pending chunk writes:', err);
+      }
+      
+      console.log(`[Renderer] All writes complete. Total bytes: ${totalBytesWritten}`);
+      console.log(`[Renderer] Fallback chunks in memory: ${recordedChunks.length}`);
       
       // Stop compositing animation loop if active
       if (animationFrameId !== null) {
         cancelAnimationFrame(animationFrameId);
         animationFrameId = null;
       }
+
+      // If aborted (timeout), don't try to save — main process already moved on
+      if (isAborted) {
+        console.log('[Renderer] Recording was aborted, skipping save');
+        cleanupCompositing();
+        if (mediaStream) {
+          mediaStream.getTracks().forEach(track => track.stop());
+          mediaStream = null;
+        }
+        recordedChunks = [];
+        currentOutputPath = null;
+        totalBytesWritten = 0;
+        return;
+      }
       
       try {
-        // Check if we have any data
-        if (recordedChunks.length === 0) {
+        // If we have fallback chunks in memory (disk writes failed), write them now
+        if (recordedChunks.length > 0 && currentOutputPath) {
+          console.log(`[Renderer] Writing ${recordedChunks.length} fallback chunks to disk...`);
+          for (const chunk of recordedChunks) {
+            const arrayBuffer = await chunk.arrayBuffer();
+            await window.electronAPI.appendRecordingChunk(arrayBuffer, currentOutputPath);
+            totalBytesWritten += arrayBuffer.byteLength;
+          }
+        }
+
+        if (totalBytesWritten === 0) {
           throw new Error('No video data was recorded');
         }
+
+        const sizeMB = (totalBytesWritten / 1024 / 1024).toFixed(2);
+        console.log(`[Renderer] Total recording size: ${sizeMB} MB`);
+
+        // Finalize: rename .webm.tmp -> .webm
+        console.log('[Renderer] Finalizing recording (renaming .tmp to .webm)...');
+        const finalizeResult = await window.electronAPI.finalizeRecording(currentOutputPath!);
         
-        // Combine all chunks into a single blob
-        const blob = new Blob(recordedChunks, { type: 'video/webm' });
-        const blobSizeMB = (blob.size / 1024 / 1024).toFixed(2);
-        console.log(`[Renderer] Created blob: ${blob.size} bytes (${blobSizeMB} MB)`);
-        
-        if (blob.size === 0) {
-          throw new Error('Recording blob is empty');
+        if (!finalizeResult.success) {
+          throw new Error(finalizeResult.error || 'Failed to finalize recording');
         }
         
-        console.log('[Renderer] Converting blob to ArrayBuffer...');
-        const arrayBuffer = await blob.arrayBuffer();
-        console.log(`[Renderer] ArrayBuffer ready: ${arrayBuffer.byteLength} bytes`);
-        
-        // Save the file via IPC with timeout
-        console.log('[Renderer] Sending to main process for save...');
-        const saveResult = await window.electronAPI.saveRecordingData(arrayBuffer, currentOutputPath!);
-        
-        if (!saveResult.success) {
-          throw new Error(saveResult.error || 'Failed to save file');
-        }
-        
-        console.log('[Renderer] Recording saved successfully');
+        console.log('[Renderer] Recording finalized successfully');
         
         // Notify main process that capture is complete
         await window.electronAPI.notifyCaptureStopped({ success: true });
@@ -356,6 +411,7 @@ async function startCapture(config: CaptureConfig): Promise<void> {
       }
       recordedChunks = [];
       currentOutputPath = null;
+      totalBytesWritten = 0;
     };
 
     mediaRecorder.onerror = (event: Event) => {
@@ -572,6 +628,9 @@ function cleanupMedia(): void {
   mediaRecorder = null;
   recordedChunks = [];
   currentOutputPath = null;
+  isAborted = false;
+  totalBytesWritten = 0;
+  pendingChunkWrite = Promise.resolve();
 }
 
 // Event Handlers
@@ -643,35 +702,6 @@ async function handleOpenFolder(): Promise<void> {
   }
 }
 
-async function handleExport(): Promise<void> {
-  if (!exportBtn) return;
-  
-  exportBtn.disabled = true;
-  const originalText = exportBtn.textContent;
-  exportBtn.textContent = 'Exporting...';
-
-  try {
-    const result = await window.electronAPI.exportSessions();
-    if (result.success) {
-      exportBtn.textContent = 'Exported!';
-      setTimeout(() => {
-        exportBtn.textContent = originalText;
-      }, 2000);
-    } else {
-      console.error('Failed to export:', result.error);
-      exportBtn.textContent = 'Failed';
-      setTimeout(() => {
-        exportBtn.textContent = originalText;
-      }, 2000);
-    }
-  } catch (error) {
-    console.error('Export failed:', error);
-    exportBtn.textContent = originalText;
-  } finally {
-    exportBtn.disabled = false;
-  }
-}
-
 /**
  * Clean up all event listeners
  */
@@ -679,6 +709,7 @@ function cleanup(): void {
   cleanupStatusListener?.();
   cleanupStartCapture?.();
   cleanupStopCapture?.();
+  cleanupAbortCapture?.();
   cleanupRecordingSaved?.();
   cleanupFocusTaskInput?.();
   cleanupMedia();
@@ -699,7 +730,6 @@ function init(): void {
   // Set up button event listeners
   recordBtn?.addEventListener('click', handleRecordClick);
   openFolderBtn?.addEventListener('click', handleOpenFolder);
-  exportBtn?.addEventListener('click', handleExport);
 
   // Listen for status updates from main process (store cleanup functions)
   cleanupStatusListener = window.electronAPI.onStatusUpdate((status: SystemStatus) => {
@@ -715,6 +745,18 @@ function init(): void {
 
   cleanupStopCapture = window.electronAPI.onStopCapture(() => {
     stopCapture();
+  });
+
+  // Listen for abort signal (main process timed out waiting for stop)
+  cleanupAbortCapture = window.electronAPI.onAbortCapture(() => {
+    console.log('[Renderer] Received abort signal from main process');
+    isAborted = true;
+    // Force-stop MediaRecorder if still active - onstop handler will skip save
+    // Do NOT call cleanupMedia() here — let onstop fire and check isAborted flag
+    // cleanupMedia() would reset isAborted=false before onstop runs
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+    }
   });
 
   // Listen for recording saved notification
