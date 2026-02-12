@@ -879,7 +879,9 @@ function setupIpcHandlers(): void {
 
   // Handle renderer reporting that capture setup failed (e.g. getUserMedia denied)
   ipcMain.handle('capture-start-failed', async (_event, error: string) => {
-    log(`Renderer reported capture start failure: ${error}`);
+    // Ensure error message is never empty
+    const errorMsg = (typeof error === 'string' && error.trim()) ? error : 'Screen capture failed - unknown reason';
+    log(`Renderer reported capture start failure: ${errorMsg}`);
     if (isRecordingState) {
       stopRecordingTimer();
       isRecordingState = false;
@@ -888,7 +890,7 @@ function setupIpcHandlers(): void {
       sessionManager?.endCurrentSession();
       updateTrayMenu();
       updateTrayIcon();
-      sendStatus({ state: 'error', message: 'Capture failed', error });
+      sendStatus({ state: 'error', message: 'Capture failed', error: errorMsg });
     }
   });
 

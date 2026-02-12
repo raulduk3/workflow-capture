@@ -219,7 +219,8 @@ function updateUI(status: SystemStatus): void {
       timerDisplay.classList.add('hidden');
       errorContainer.classList.remove('hidden');
       if (errorMessage) {
-        errorMessage.textContent = status.error || 'An error occurred';
+        // Prefer specific error, fall back to status message, then generic
+        errorMessage.textContent = status.error || status.message || 'An unknown error occurred';
       }
       break;
   }
@@ -498,7 +499,29 @@ async function startCapture(config: CaptureConfig): Promise<void> {
   } catch (error) {
     console.error('[Renderer] Failed to start capture:', error);
     cleanupCompositing();
-    throw error;
+
+    // Wrap with descriptive context for common Windows capture failures
+    if (error instanceof DOMException) {
+      const name = error.name || 'DOMException';
+      const msg = error.message || '';
+      if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+        throw new Error(`Screen recording permission denied. Check Windows Settings > Privacy > Screen recording. (${name}${msg ? ': ' + msg : ''})`);
+      } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+        throw new Error(`No screen source found for capture. Try reconnecting your display. (${name}${msg ? ': ' + msg : ''})`);
+      } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+        throw new Error(`Screen capture failed - display may be in use by another app or GPU driver issue. (${name}${msg ? ': ' + msg : ''})`);
+      } else if (!msg) {
+        throw new Error(`Screen capture failed (${name}). Try restarting the application.`);
+      }
+    }
+
+    // Re-throw original if it already has a message
+    if (error instanceof Error && error.message) {
+      throw error;
+    }
+
+    // Fallback: wrap with a useful message
+    throw new Error(`Screen capture failed: ${error instanceof Error ? error.name : String(error) || 'unknown error'}`);
   }
 }
 
@@ -829,10 +852,24 @@ function init(): void {
   cleanupStartCapture = window.electronAPI.onStartCapture((config: CaptureConfig) => {
     startCapture(config).catch(async (error) => {
       console.error('[Renderer] Capture failed:', error);
+      // Build a descriptive error message - never send empty string
+      let errorMsg = 'Capture setup failed';
+      if (error instanceof Error) {
+        // DOMException on Windows can have empty message but a useful name
+        const name = (error as DOMException).name || '';
+        const message = error.message || '';
+        if (message) {
+          errorMsg = name && name !== 'Error' ? `${name}: ${message}` : message;
+        } else if (name) {
+          errorMsg = `Screen capture failed (${name})`;
+        } else {
+          errorMsg = 'Screen capture failed - check Windows privacy settings allow screen recording';
+        }
+      } else if (typeof error === 'string' && error) {
+        errorMsg = error;
+      }
       // Notify main process so it can reset recording state
-      await window.electronAPI.notifyCaptureStartFailed(
-        error instanceof Error ? error.message : 'Capture setup failed'
-      );
+      await window.electronAPI.notifyCaptureStartFailed(errorMsg);
     });
   });
 
