@@ -533,6 +533,8 @@ async function startCapture(config: CaptureConfig): Promise<void> {
         throw new Error(`No screen source found for capture. Try reconnecting your display. (${name}${msg ? ': ' + msg : ''})`);
       } else if (name === 'NotReadableError' || name === 'TrackStartError') {
         throw new Error(`Screen capture failed - display may be in use by another app or GPU driver issue. (${name}${msg ? ': ' + msg : ''})`);
+      } else if (name === 'OverconstrainedError') {
+        throw new Error(`Screen capture failed - display does not support the requested resolution or frame rate. Try lowering video settings or reconnecting the display. (${name}${msg ? ': ' + msg : ''})`);
       } else if (!msg) {
         throw new Error(`Screen capture failed (${name}). Try restarting the application.`);
       }
