@@ -140,3 +140,8 @@ vite.config.ts.timestamp-*
 release/
 
 .DS_Store
+
+# Pipeline
+pipeline/.env
+pipeline/__pycache__/
+pipeline/*.pyc
