@@ -6,13 +6,63 @@ import { SessionManager } from './session-manager';
 import { FileManager } from './file-manager';
 import { SystemState, SystemStatus, APP_CONSTANTS, ExternalConfig, CONFIG_DEFAULTS } from '../shared/types';
 
+// =============================================================================
+// Production Log File
+// =============================================================================
+// Write logs to a file so errors can be diagnosed on deployed Windows machines
+// Log location: C:\temp\L7SWorkflowCapture\app.log (Windows) or /tmp/L7SWorkflowCapture/app.log
+const LOG_MAX_SIZE = 2 * 1024 * 1024; // 2MB max log file size
+let logFilePath: string | null = null;
+
+function initLogFile(): void {
+  try {
+    const basePath = process.platform === 'win32' ? 'C:\\temp' : '/tmp';
+    const logDir = path.join(basePath, APP_CONSTANTS.APP_NAME);
+    // Ensure directory exists (sync is fine here - runs once at startup)
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    logFilePath = path.join(logDir, 'app.log');
+    // Rotate log if too large
+    try {
+      const stats = fs.statSync(logFilePath);
+      if (stats.size > LOG_MAX_SIZE) {
+        const rotatedPath = logFilePath + '.old';
+        try { fs.unlinkSync(rotatedPath); } catch {}
+        fs.renameSync(logFilePath, rotatedPath);
+      }
+    } catch {}
+    // Write startup marker
+    const startMsg = `\n${'='.repeat(60)}\n[${new Date().toISOString()}] Application starting (v${app.getVersion()})\n${'='.repeat(60)}\n`;
+    fs.appendFileSync(logFilePath, startMsg);
+  } catch (err) {
+    // Can't write logs - continue without file logging
+    console.error('Failed to initialize log file:', err);
+    logFilePath = null;
+  }
+}
+
+function writeToLogFile(message: string): void {
+  if (!logFilePath) return;
+  try {
+    const timestamp = new Date().toISOString();
+    fs.appendFileSync(logFilePath, `[${timestamp}] ${message}\n`);
+  } catch {
+    // Silently ignore log write failures
+  }
+}
+
 // Global error handlers
 process.on('uncaughtException', (error) => {
-  console.error('[Main] Uncaught Exception:', error.message);
+  const msg = `[Main] Uncaught Exception: ${error.message}\n${error.stack || ''}`;
+  console.error(msg);
+  writeToLogFile(msg);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
+  const msg = `[Main] Unhandled Rejection: ${reason}`;
   console.error('[Main] Unhandled Rejection at:', promise, 'reason:', reason);
+  writeToLogFile(msg);
 });
 
 // Re-export types from shared for backwards compatibility
@@ -124,6 +174,7 @@ let isToggling = false;
 
 function log(message: string): void {
   console.log(`[Main] ${message}`);
+  writeToLogFile(`[Main] ${message}`);
 }
 
 /**
@@ -146,6 +197,11 @@ function showAndFocusWindow(): void {
 function sendStatus(status: SystemStatus): void {
   // Track current state for tray menu
   currentSystemState = status.state;
+  
+  // Log error states to file for production debugging
+  if (status.state === 'error') {
+    log(`ERROR STATE: message="${status.message}", error="${status.error || '(none)'}"`);
+  }
   
   if (mainWindow && !mainWindow.isDestroyed()) {
     // Ensure webContents is ready before sending
@@ -987,6 +1043,9 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(async () => {
+    // Initialize log file first so all subsequent logs are captured
+    initLogFile();
+    
     log('App ready');
     
     // Load external configuration first (allows remote config changes without reinstall)
