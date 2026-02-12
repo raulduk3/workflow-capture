@@ -1,0 +1,206 @@
+# =============================================================================
+# L7S Workflow Analysis - Full Pipeline Runner
+# =============================================================================
+# Wrapper script for Windows Task Scheduler or manual execution.
+# Runs both stages of the pipeline in sequence:
+#   1. PowerShell: Convert .webm → .mp4 + session CSV (ffmpeg)
+#   2. Python: Extract frames → Gemini Vision → analysis CSV + patterns
+#
+# Prerequisites:
+#   - ffmpeg installed via Chocolatey (choco install ffmpeg)
+#   - Python 3.10+ with pipeline dependencies (pip install -r pipeline/requirements.txt)
+#   - Gemini API key configured in pipeline/.env
+#   - Network share \\bulley-fs1\workflow accessible
+#
+# Usage:
+#   .\Run-WorkflowPipeline.ps1                      # Full pipeline
+#   .\Run-WorkflowPipeline.ps1 -SkipConversion       # Skip MP4 conversion
+#   .\Run-WorkflowPipeline.ps1 -MetadataOnly         # Skip Gemini analysis
+#   .\Run-WorkflowPipeline.ps1 -GenerateReport       # Include insights report
+#   .\Run-WorkflowPipeline.ps1 -User "rcrane"        # Single user
+# =============================================================================
+
+param(
+    [Parameter(Mandatory=$false)]
+    [switch]$SkipConversion = $false,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$MetadataOnly = $false,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$GenerateReport = $false,
+
+    [Parameter(Mandatory=$false)]
+    [string]$User = "",
+
+    [Parameter(Mandatory=$false)]
+    [int]$Limit = 0,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$DryRun = $false
+)
+
+$ErrorActionPreference = "Continue"
+
+# Paths
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot = Split-Path -Parent $ScriptDir
+$PipelineDir = Join-Path $RepoRoot "pipeline"
+$ConvertScript = Join-Path $ScriptDir "Convert-WorkflowSessions.ps1"
+$PipelineScript = Join-Path $PipelineDir "run_pipeline.py"
+$LogDir = "C:\temp\WorkflowProcessing\logs"
+
+function Write-Log {
+    param(
+        [string]$Message,
+        [string]$Level = "INFO"
+    )
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $line = "[$timestamp] [$Level] $Message"
+    Write-Host $line
+
+    # Also write to log file
+    if (-not (Test-Path $LogDir)) {
+        New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+    }
+    $logFile = Join-Path $LogDir "pipeline_$(Get-Date -Format 'yyyy-MM-dd').log"
+    Add-Content -Path $logFile -Value $line -Encoding UTF8
+}
+
+# =============================================================================
+# Main Execution
+# =============================================================================
+
+$startTime = Get-Date
+
+Write-Log "=========================================="
+Write-Log "L7S Workflow Analysis - Full Pipeline"
+Write-Log "=========================================="
+Write-Log "Repo:        $RepoRoot"
+Write-Log "Pipeline:    $PipelineDir"
+if ($SkipConversion) { Write-Log "Stage 1:     SKIPPED (--SkipConversion)" }
+if ($MetadataOnly)   { Write-Log "Stage 2:     METADATA ONLY (no Gemini)" }
+if ($DryRun)         { Write-Log "Mode:        DRY RUN" }
+if ($User)           { Write-Log "Filter:      User = $User" }
+if ($Limit -gt 0)    { Write-Log "Limit:       $Limit videos" }
+Write-Log "=========================================="
+
+$overallSuccess = $true
+
+# =============================================================================
+# Stage 1: WebM → MP4 Conversion
+# =============================================================================
+
+if (-not $SkipConversion) {
+    Write-Log ""
+    Write-Log "=== STAGE 1: Video Conversion (WebM → MP4) ==="
+
+    if (-not (Test-Path $ConvertScript)) {
+        Write-Log "ERROR: Conversion script not found: $ConvertScript" "ERROR"
+        $overallSuccess = $false
+    } else {
+        $convertArgs = @{}
+        if ($User) { $convertArgs["SingleUser"] = $User }
+        if ($DryRun) { $convertArgs["DryRun"] = $true }
+
+        try {
+            & $ConvertScript @convertArgs
+            $convertExit = $LASTEXITCODE
+
+            if ($convertExit -eq 0) {
+                Write-Log "Stage 1 completed successfully"
+            } else {
+                Write-Log "Stage 1 completed with warnings (exit code: $convertExit)" "WARN"
+                if ($convertExit -ge 3) { $overallSuccess = $false }
+            }
+        } catch {
+            Write-Log "Stage 1 FAILED: $_" "ERROR"
+            $overallSuccess = $false
+        }
+    }
+} else {
+    Write-Log ""
+    Write-Log "=== STAGE 1: SKIPPED ==="
+}
+
+# =============================================================================
+# Stage 2: Analysis Pipeline (Python)
+# =============================================================================
+
+Write-Log ""
+Write-Log "=== STAGE 2: Analysis Pipeline (Frames → Gemini → CSV) ==="
+
+# Find Python
+$pythonExe = $null
+$pythonCandidates = @(
+    "python",
+    "python3",
+    "C:\Python312\python.exe",
+    "C:\Python311\python.exe",
+    "C:\Python310\python.exe"
+)
+
+foreach ($candidate in $pythonCandidates) {
+    $result = Get-Command $candidate -ErrorAction SilentlyContinue
+    if ($result) {
+        $pythonExe = $result.Source
+        break
+    }
+}
+
+if (-not $pythonExe) {
+    Write-Log "ERROR: Python not found. Install Python 3.10+ and add to PATH." "ERROR"
+    $overallSuccess = $false
+} elseif (-not (Test-Path $PipelineScript)) {
+    Write-Log "ERROR: Pipeline script not found: $PipelineScript" "ERROR"
+    $overallSuccess = $false
+} else {
+    Write-Log "Python: $pythonExe"
+
+    # Build args
+    $pyArgs = @($PipelineScript)
+    if ($User) { $pyArgs += "--user"; $pyArgs += $User }
+    if ($Limit -gt 0) { $pyArgs += "--limit"; $pyArgs += $Limit.ToString() }
+    if ($DryRun) { $pyArgs += "--dry-run" }
+    if ($MetadataOnly) { $pyArgs += "--metadata-only" }
+    if ($GenerateReport) { $pyArgs += "--report" }
+
+    try {
+        # Run with working directory set to pipeline folder
+        Push-Location $PipelineDir
+        & $pythonExe @pyArgs
+        $pyExit = $LASTEXITCODE
+        Pop-Location
+
+        if ($pyExit -eq 0) {
+            Write-Log "Stage 2 completed successfully"
+        } else {
+            Write-Log "Stage 2 completed with errors (exit code: $pyExit)" "WARN"
+            $overallSuccess = $false
+        }
+    } catch {
+        Write-Log "Stage 2 FAILED: $_" "ERROR"
+        Pop-Location -ErrorAction SilentlyContinue
+        $overallSuccess = $false
+    }
+}
+
+# =============================================================================
+# Summary
+# =============================================================================
+
+$elapsed = (Get-Date) - $startTime
+
+Write-Log ""
+Write-Log "=========================================="
+Write-Log "Pipeline Complete"
+Write-Log "=========================================="
+Write-Log "Elapsed:  $($elapsed.ToString('hh\:mm\:ss'))"
+Write-Log "Status:   $(if ($overallSuccess) { 'SUCCESS' } else { 'COMPLETED WITH ERRORS' })"
+Write-Log "=========================================="
+
+if ($overallSuccess) {
+    exit 0
+} else {
+    exit 1
+}
