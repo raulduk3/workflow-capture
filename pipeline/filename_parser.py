@@ -1,0 +1,157 @@
+"""
+L7S Workflow Analysis Pipeline - Filename Parser
+
+Extracts structured metadata from workflow capture filenames.
+Format: YYYY-MM-DD_HHMMSS_MACHINENAME_TaskDescription.webm
+Parent folder name = username.
+
+Handles edge cases from real data:
+  - & characters in descriptions (e.g., Culver_S&W_scope)
+  - Apostrophes in descriptions (e.g., RFI's)
+  - "No_description" entries
+  - Machine names with hyphens (e.g., AALEKIC-LWX1)
+"""
+
+import hashlib
+import re
+from datetime import datetime
+from pathlib import Path, PureWindowsPath
+from typing import Optional
+
+
+def parse_filename(file_path: str) -> Optional[dict]:
+    """
+    Parse a workflow capture file path into structured metadata.
+
+    Args:
+        file_path: Full path to the .webm file.
+                   The parent folder name is used as the username.
+
+    Returns:
+        Dictionary with parsed fields, or None if parsing fails.
+        Fields: video_id, username, timestamp, machine_id,
+                task_description, day_of_week, hour_of_day,
+                source_path
+    """
+    # Use PureWindowsPath for parsing since source paths are UNC (\\server\share).
+    # This works correctly on both Windows and macOS/Linux.
+    path = PureWindowsPath(file_path)
+    filename = path.name
+    username = path.parent.name.lower()
+
+    # Primary regex: YYYY-MM-DD_HHMMSS_MACHINENAME_TaskDescription.webm
+    # Machine names follow pattern: LETTERS/DIGITS + HYPHEN + LETTERS/DIGITS
+    # (e.g., AALEKIC-LWX1, RCRANE-LWX1, EFUENTES-LWX2)
+    pattern = r'^(\d{4}-\d{2}-\d{2})_(\d{6})_([A-Za-z0-9]+-[A-Za-z0-9]+)_(.+)\.webm$'
+    match = re.match(pattern, filename)
+
+    if not match:
+        # Fallback: machine name without hyphen
+        pattern_loose = r'^(\d{4}-\d{2}-\d{2})_(\d{6})_([^_]+)_(.+)\.webm$'
+        match = re.match(pattern_loose, filename)
+
+    if not match:
+        return None
+
+    date_str = match.group(1)
+    time_str = match.group(2)
+    machine_id = match.group(3)
+    task_raw = match.group(4)
+
+    # Format time: HHMMSS -> HH:MM:SS
+    formatted_time = f"{time_str[0:2]}:{time_str[2:4]}:{time_str[4:6]}"
+
+    # Build ISO timestamp
+    timestamp_str = f"{date_str}T{formatted_time}"
+
+    # Parse datetime for derived fields
+    try:
+        dt = datetime.strptime(f"{date_str} {formatted_time}", "%Y-%m-%d %H:%M:%S")
+        day_of_week = dt.strftime("%A")  # Monday, Tuesday, etc.
+        hour_of_day = dt.hour
+    except ValueError:
+        day_of_week = "Unknown"
+        hour_of_day = -1
+
+    # Clean task description: underscores -> spaces
+    task_description = task_raw.replace("_", " ")
+
+    # Generate unique video_id from the full source path
+    video_id = hashlib.sha256(file_path.encode("utf-8")).hexdigest()[:12]
+
+    return {
+        "video_id": video_id,
+        "username": username,
+        "timestamp": timestamp_str,
+        "machine_id": machine_id,
+        "task_description": task_description,
+        "day_of_week": day_of_week,
+        "hour_of_day": hour_of_day,
+        "source_path": file_path,
+    }
+
+
+def discover_videos(source_share: str, single_user: str = "") -> list[dict]:
+    """
+    Walk the source share and parse all .webm filenames.
+
+    Args:
+        source_share: Root path to the network share (e.g., \\\\bulley-fs1\\workflow)
+        single_user: If set, only scan this user's subfolder.
+
+    Returns:
+        List of parsed metadata dicts, one per video file.
+    """
+    root = Path(source_share)
+    results = []
+
+    if single_user:
+        user_dirs = [root / single_user]
+    else:
+        # Enumerate user folders, skip _ prefixed system folders like _outputs
+        try:
+            user_dirs = [
+                d for d in root.iterdir()
+                if d.is_dir() and not d.name.startswith("_")
+            ]
+        except PermissionError:
+            print(f"[ERROR] Cannot access source share: {source_share}")
+            return []
+
+    for user_dir in user_dirs:
+        if not user_dir.exists():
+            print(f"[WARN] User folder not found: {user_dir}")
+            continue
+
+        try:
+            webm_files = sorted(user_dir.glob("*.webm"))
+        except PermissionError:
+            print(f"[WARN] Cannot access folder: {user_dir}")
+            continue
+
+        for webm_path in webm_files:
+            parsed = parse_filename(str(webm_path))
+            if parsed:
+                results.append(parsed)
+            else:
+                print(f"[WARN] Could not parse: {webm_path.name}")
+
+    return results
+
+
+if __name__ == "__main__":
+    # Quick test with sample filenames
+    test_files = [
+        r"\\bulley-fs1\workflow\aalekic\2026-02-05_080501_AALEKIC-LWX1_Signing_off_on_credit_cards.webm",
+        r"\\bulley-fs1\workflow\cheras\2026-02-04_093044_RCRANE-LWX1_Culver_S&W_scope_of_work_within_the_workbook.webm",
+        r"\\bulley-fs1\workflow\rcrane\2026-02-05_100835_RCRANE-LWX1_Culver_S&W_RFI's,_email_and_plan_review.webm",
+        r"\\bulley-fs1\workflow\cheras\2026-02-04_082121_RCRANE-LWX1_No_description.webm",
+        r"\\bulley-fs1\workflow\efuentes\2026-02-09_074055_EFUENTES-LWX2_Payroll_processing.webm",
+    ]
+
+    for f in test_files:
+        result = parse_filename(f)
+        if result:
+            print(f"  OK: {result['username']:12s} | {result['timestamp']} | {result['machine_id']:16s} | {result['task_description']}")
+        else:
+            print(f"  FAIL: {f}")
