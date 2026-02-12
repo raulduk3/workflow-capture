@@ -266,22 +266,45 @@ async function startCapture(config: CaptureConfig): Promise<void> {
       );
     } else {
       // Single screen or macOS "Entire Screen" capture
-      mediaStream = await navigator.mediaDevices.getUserMedia({
+      // Try with preferred constraints first, then fall back to relaxed constraints
+      // on OverconstrainedError (hardware may not support requested resolution/fps)
+      // @ts-ignore - Electron-specific constraint for desktopCapturer
+      const preferredConstraints = {
         audio: false,
         video: {
-          // @ts-ignore - Electron-specific constraint
           mandatory: {
             chromeMediaSource: 'desktop',
             chromeMediaSourceId: config.sourceId,
-            minWidth: 1280,
+            minWidth: 640,
             maxWidth: captureWidth,
-            minHeight: 720,
+            minHeight: 480,
             maxHeight: captureHeight,
-            minFrameRate: 30,
+            minFrameRate: 15,
             maxFrameRate: 30,
           },
         },
-      });
+      };
+
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia(preferredConstraints as any);
+      } catch (constraintError: any) {
+        if (constraintError?.name === 'OverconstrainedError') {
+          console.warn('[Renderer] Preferred constraints overconstrained, retrying with minimal constraints');
+          // Minimal constraints - just specify the source, let the system pick resolution/fps
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+              // @ts-ignore - Electron-specific constraint
+              mandatory: {
+                chromeMediaSource: 'desktop',
+                chromeMediaSourceId: config.sourceId,
+              },
+            },
+          });
+        } else {
+          throw constraintError;
+        }
+      }
 
       // Log actual captured video dimensions for verification
       const videoTrack = mediaStream.getVideoTracks()[0];
@@ -585,10 +608,11 @@ async function setupMultiMonitorCapture(
     console.log(`[Renderer] Capturing source ${source.name} (displayIndex=${source.displayIndex}) -> display at (${display.x}, ${display.y})`);
     
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      let stream: MediaStream;
+      // @ts-ignore - Electron-specific constraint for desktopCapturer
+      const preferredMultiConstraints = {
         audio: false,
         video: {
-          // @ts-ignore - Electron-specific constraint
           mandatory: {
             chromeMediaSource: 'desktop',
             chromeMediaSourceId: source.id,
@@ -596,11 +620,31 @@ async function setupMultiMonitorCapture(
             maxWidth: display.width,
             minHeight: 480,
             maxHeight: display.height,
-            minFrameRate: 30,
+            minFrameRate: 15,
             maxFrameRate: 30,
           },
         },
-      });
+      };
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(preferredMultiConstraints as any);
+      } catch (constraintError: any) {
+        if (constraintError?.name === 'OverconstrainedError') {
+          console.warn(`[Renderer] Constraints overconstrained for ${source.name}, retrying with minimal`);
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+              // @ts-ignore - Electron-specific constraint
+              mandatory: {
+                chromeMediaSource: 'desktop',
+                chromeMediaSourceId: source.id,
+              },
+            },
+          });
+        } else {
+          throw constraintError;
+        }
+      }
       
       additionalStreams.push(stream);
       
