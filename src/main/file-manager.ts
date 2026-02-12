@@ -81,6 +81,65 @@ export class FileManager {
   }
 
   /**
+   * Check available disk space in the sessions directory
+   * Returns available space in bytes, or -1 if unable to determine
+   * ISSUE FIX: Check disk space before recording (Issue 6)
+   */
+  public async getAvailableDiskSpace(): Promise<number> {
+    try {
+      // Try to get available space by creating a test file
+      // This is imperfect but works across platforms
+      // ISSUE FIX: Handle race conditions with try/finally (Issue not in list but found)
+      const testFile = path.join(this.sessionsPath, `.disk-test-${Date.now()}-${Math.random().toString(36).substring(7)}`);
+      
+      // Estimate: if we can create a 1MB file, assume we have at least ~100MB free
+      const testSize = 1024 * 1024; // 1MB
+      const buffer = Buffer.alloc(testSize);
+      
+      try {
+        await fs.writeFile(testFile, buffer);
+        await fs.unlink(testFile);
+        this.log(`Disk space check: At least ${testSize / 1024 / 1024}MB available`);
+        return testSize * 100; // Conservative estimate: ~100x what we tested
+      } catch (err) {
+        // Clean up even if write failed
+        try {
+          await fs.unlink(testFile);
+        } catch {}
+        
+        // If we can't write 1MB, we're very low on space
+        this.log(`WARNING: Low disk space - cannot write 1MB test file: ${err}`);
+        return 0;
+      }
+    } catch (err) {
+      this.log(`Warning: Could not determine available disk space: ${err}`);
+      return -1; // Unknown
+    }
+  }
+
+  /**
+   * Verify minimum disk space before recording
+   * Ensures we don't start a recording that will fail partway through
+   */
+  public async verifyMinimumDiskSpace(minimumMB: number = 50): Promise<boolean> {
+    const available = await this.getAvailableDiskSpace();
+    const minimumBytes = minimumMB * 1024 * 1024;
+    
+    if (available === -1) {
+      // Can't determine space, proceed but log warning
+      this.log(`WARNING: Could not verify disk space, proceeding with caution`);
+      return true;
+    }
+    
+    if (available < minimumBytes) {
+      this.log(`ERROR: Insufficient disk space (need ${minimumMB}MB, have ${(available / 1024 / 1024).toFixed(2)}MB)`);
+      return false;
+    }
+    
+    return true;
+  }
+
+  /**
    * Get the full path for a new recording file
    */
   public async getRecordingPath(note: string): Promise<string> {

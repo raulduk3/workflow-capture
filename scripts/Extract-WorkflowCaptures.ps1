@@ -115,14 +115,34 @@ function Archive-Recordings {
         Compress-Archive -Path $FilesToArchive -DestinationPath $zipPath -Force
         Write-Log "Archive created: $zipPath"
         
-        # Remove original files after successful archive
+        # Verify archive was created and has content
+        if (-not (Test-Path $zipPath)) {
+            throw "Archive file was not created"
+        }
+        $zipSize = (Get-Item $zipPath).Length
+        if ($zipSize -eq 0) {
+            throw "Archive file is empty"
+        }
+        Write-Log "Archive verified: $('{0:N2}' -f ($zipSize / 1MB)) MB"
+        
+        # ONLY remove original files after confirming archive success
+        $deletedCount = 0
+        $failedDeletes = @()
         foreach ($file in $FilesToArchive) {
             try {
                 Remove-Item -Path $file -Force
                 Write-Log "Removed original: $(Split-Path $file -Leaf)"
+                $deletedCount++
             } catch {
-                Write-Log "WARNING: Could not remove $file`: $_"
+                Write-Log "WARNING: Could not remove $(Split-Path $file -Leaf): $_"
+                $failedDeletes += $file
             }
+        }
+        
+        # If some files failed to delete, warn but still return success (archives are safe)
+        if ($failedDeletes.Count -gt 0) {
+            Write-Log "WARNING: $($failedDeletes.Count) file(s) could not be deleted after archive (may be locked)"
+            Write-Log "These files will be retried on next run"
         }
         
         return $zipPath
@@ -145,6 +165,24 @@ function Copy-Recordings {
     }
     
     Write-Log "Processing recordings from: $sessionsPath"
+    
+    # Verify destination is accessible and writable before copying
+    if (-not (Test-Path $DestinationBase)) {
+        Write-Log "ERROR: Destination path not accessible: $DestinationBase"
+        return $null
+    }
+    
+    # Test write permission by attempting to create a test file
+    $testFile = Join-Path $DestinationBase ".l7s-write-test-$([guid]::NewGuid().ToString().Substring(0,8))"
+    try {
+        [System.IO.File]::WriteAllText($testFile, "test")
+        Remove-Item $testFile -Force -ErrorAction SilentlyContinue
+        Write-Log "Destination is writable: $DestinationBase"
+    } catch {
+        Write-Log "ERROR: Destination is not writable (permission denied): $DestinationBase"
+        Write-Log "  Details: $_"
+        return $null
+    }
     
     # Get all .webm files (exclude .webm.tmp files which are actively being written)
     $recordings = Get-ChildItem $sessionsPath -Filter "*.webm" -File -ErrorAction SilentlyContinue |
@@ -189,9 +227,9 @@ function Copy-Recordings {
             }
             $validRecordings += $rec
         } catch {
-            Write-Log "WARNING: Could not validate $($rec.Name): $_"
-            # Include it anyway if we can't read the header
-            $validRecordings += $rec
+            # ISSUE FIX: Skip file if we cannot read header - don't include it
+            Write-Log "ERROR: Could not validate $($rec.Name) - skipping: $_"
+            continue
         }
     }
     
@@ -222,13 +260,28 @@ function Copy-Recordings {
     foreach ($recording in $validRecordings) {
         $destPath = Join-Path $userFolder $recording.Name
         
-        try {
-            Copy-Item -Path $recording.FullName -Destination $destPath -Force
-            Write-Log "Copied: $($recording.Name)"
-            $copiedFiles += $recording.FullName
-            $copiedCount++
-        } catch {
-            Write-Log "ERROR: Failed to copy $($recording.Name): $_"
+        # Retry logic for network operations (backoff: 100ms, 500ms, 1s, 2s)
+        $maxRetries = 4
+        $retryDelays = @(100, 500, 1000, 2000)
+        $copied = $false
+        
+        for ($attempt = 0; $attempt -lt $maxRetries; $attempt++) {
+            try {
+                Copy-Item -Path $recording.FullName -Destination $destPath -Force
+                Write-Log "Copied: $($recording.Name)"
+                $copiedFiles += $recording.FullName
+                $copiedCount++
+                $copied = $true
+                break
+            } catch {
+                if ($attempt -lt ($maxRetries - 1)) {
+                    $delay = $retryDelays[$attempt]
+                    Write-Log "WARNING: Copy failed for $($recording.Name), retry in ${delay}ms (attempt $($attempt + 1)/$maxRetries): $_"
+                    Start-Sleep -Milliseconds $delay
+                } else {
+                    Write-Log "ERROR: Failed to copy $($recording.Name) after $maxRetries attempts: $_"
+                }
+            }
         }
     }
     
@@ -287,9 +340,22 @@ if (Test-Path $sessionsPathForCleanup) {
     }
 }
 
-# Validate destination
+# Validate destination with retry logic
+Write-Log "Verifying destination path: $DestinationPath"
+$destRetries = 3
+for ($i = 0; $i -lt $destRetries; $i++) {
+    if (Test-Path $DestinationPath) {
+        Write-Log "Destination verified: $DestinationPath" -Level "SUCCESS"
+        break
+    }
+    if ($i -lt ($destRetries - 1)) {
+        Write-Log "WARNING: Destination not reachable, retrying in 2s..."
+        Start-Sleep -Seconds 2
+    }
+}
+
 if (-not (Test-Path $DestinationPath)) {
-    Write-Log "ERROR: Destination path does not exist: $DestinationPath"
+    Write-Log "ERROR: Destination path does not exist or is not reachable: $DestinationPath"
     exit 1
 }
 

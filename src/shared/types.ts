@@ -86,9 +86,6 @@ export const CONFIG_DEFAULTS: Required<ExternalConfig> = {
 
 /** Application constants */
 export const APP_CONSTANTS = {
-  /** Maximum recording duration in milliseconds (5 minutes) - DEFAULT, can be overridden by config.json */
-  MAX_RECORDING_DURATION_MS: 5 * 60 * 1000,
-  
   /** Application name used for file paths */
   APP_NAME: 'L7SWorkflowCapture',
   

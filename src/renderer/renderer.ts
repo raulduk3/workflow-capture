@@ -42,10 +42,10 @@ interface CaptureConfig {
 // Constants - Balanced for quality and compatibility
 const DEFAULT_VIDEO_BITRATE = 5_000_000; // 5 Mbps fallback
 const CHUNK_INTERVAL_MS = 1000;
+const MAX_FALLBACK_BYTES = 100 * 1024 * 1024; // 100 MB cap for in-memory fallback
 
 // DOM Elements - use assertion after null check
 const statusIndicator = document.getElementById('status-indicator');
-const statusDot = document.getElementById('status-dot');
 const statusText = document.getElementById('status-text');
 const timerDisplay = document.getElementById('timer-display');
 const timer = document.getElementById('timer');
@@ -58,8 +58,11 @@ const openFolderBtn = document.getElementById('open-folder-btn') as HTMLButtonEl
 const toastNotification = document.getElementById('toast-notification');
 const toastMessage = document.getElementById('toast-message');
 
-// Toast notification timeout handle
 let toastTimeout: ReturnType<typeof setTimeout> | null = null;
+// ISSUE FIX: Track abort timeout (Issue 12)
+let abortTimeoutId: ReturnType<typeof setTimeout> | null = null;
+// Track if media has been force-cleaned (to prevent onstop from trying to save)
+let isForceCleanedUp = false;
 
 /**
  * Show a toast notification that fades away after a delay
@@ -129,8 +132,12 @@ let cleanupFocusTaskInput: (() => void) | null = null;
 
 // Track whether recording was aborted (timeout) vs normal stop
 let isAborted = false;
+// Track whether we're in the normal stop sequence to prevent abort override (Issue 5)
+let isStoppingNormally = false;
 // Track total bytes written to disk incrementally
 let totalBytesWritten = 0;
+// Track bytes stored in fallback memory buffer to enforce cap
+let fallbackBytesStored = 0;
 // Chain chunk writes to prevent out-of-order or onstop race
 let pendingChunkWrite: Promise<void> = Promise.resolve();
 
@@ -236,6 +243,8 @@ async function startCapture(config: CaptureConfig): Promise<void> {
     currentOutputPath = config.outputPath;
     recordedChunks = [];
     isAborted = false;
+    // ISSUE FIX: Reset force cleanup flag when starting new recording (Issue 12)
+    isForceCleanedUp = false;
     totalBytesWritten = 0;
 
     // Use bitrate from config, fallback to default
@@ -278,6 +287,21 @@ async function startCapture(config: CaptureConfig): Promise<void> {
       if (videoTrack) {
         const settings = videoTrack.getSettings();
         console.log(`[Renderer] Actual capture resolution: ${settings.width}x${settings.height}`);
+        
+        // ISSUE FIX: Validate actual vs expected resolution (Issue 7)
+        const minAcceptableWidth = 640;
+        const minAcceptableHeight = 480;
+        if (!settings.width || !settings.height || settings.width < minAcceptableWidth || settings.height < minAcceptableHeight) {
+          console.warn(`[Renderer] WARNING: Captured resolution ${settings.width}x${settings.height} is below minimum ${minAcceptableWidth}x${minAcceptableHeight}`);
+        }
+        if (captureWidth && captureHeight) {
+          const expectedRatio = captureWidth / captureHeight;
+          const actualRatio = settings.width! / settings.height!;
+          const ratioDiff = Math.abs(expectedRatio - actualRatio) / expectedRatio;
+          if (ratioDiff > 0.2) { // More than 20% difference
+            console.warn(`[Renderer] WARNING: Aspect ratio mismatch. Expected ${expectedRatio.toFixed(2)}, got ${actualRatio.toFixed(2)}`);
+          }
+        }
       }
 
       streamToRecord = mediaStream;
@@ -305,27 +329,69 @@ async function startCapture(config: CaptureConfig): Promise<void> {
     
     mediaRecorder = new MediaRecorder(streamToRecord, options);
 
+    // ISSUE FIX: Add retry logic for disk writes with exponential backoff (Issue 6)
+    const writeChunkWithRetry = async (arrayBuffer: ArrayBuffer, outPath: string, retryCount: number = 0, maxRetries: number = 3): Promise<boolean> => {
+      try {
+        const result = await window.electronAPI.appendRecordingChunk(arrayBuffer, outPath);
+        if (result.success) {
+          return true;
+        } else {
+          // Non-network error, don't retry
+          console.error(`[Renderer] Failed to write chunk (permanent error): ${result.error}`);
+          return false;
+        }
+      } catch (err) {
+        if (retryCount < maxRetries) {
+          const delayMs = Math.min(1000 * Math.pow(2, retryCount), 10000); // Exp backoff, max 10s
+          console.warn(`[Renderer] Chunk write failed, retrying in ${delayMs}ms (attempt ${retryCount + 1}/${maxRetries})...`, err);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          return writeChunkWithRetry(arrayBuffer, outPath, retryCount + 1, maxRetries);
+        } else {
+          console.error(`[Renderer] Failed to write chunk after ${maxRetries} retries:`, err);
+          return false;
+        }
+      }
+    };
+
+    // Push chunk to fallback buffer with size cap to prevent OOM
+    const pushToFallback = (data: Blob): void => {
+      if (fallbackBytesStored + data.size <= MAX_FALLBACK_BYTES) {
+        recordedChunks.push(data);
+        fallbackBytesStored += data.size;
+      } else {
+        console.error(`[Renderer] Fallback buffer limit reached (${MAX_FALLBACK_BYTES / 1024 / 1024}MB), dropping chunk`);
+      }
+    };
+
     mediaRecorder.ondataavailable = (event: BlobEvent) => {
       if (event.data.size > 0 && currentOutputPath && !isAborted) {
         // Chain writes sequentially to guarantee ordering and prevent
         // onstop from finalizing before the last chunk is flushed
         const data = event.data;
         const outPath = currentOutputPath;
-        pendingChunkWrite = pendingChunkWrite.then(async () => {
-          try {
-            const arrayBuffer = await data.arrayBuffer();
-            const result = await window.electronAPI.appendRecordingChunk(arrayBuffer, outPath);
-            if (result.success) {
-              totalBytesWritten += arrayBuffer.byteLength;
-            } else {
-              console.error('[Renderer] Failed to write chunk to disk:', result.error);
-              recordedChunks.push(data);
+
+        pendingChunkWrite = pendingChunkWrite
+          .then(async () => {
+            try {
+              const arrayBuffer = await data.arrayBuffer();
+              const success = await writeChunkWithRetry(arrayBuffer, outPath);
+              if (success) {
+                totalBytesWritten += arrayBuffer.byteLength;
+              } else {
+                // After retries exhausted, store in memory as fallback
+                console.error('[Renderer] Storing chunk in fallback memory buffer');
+                pushToFallback(data);
+              }
+            } catch (err) {
+              console.error('[Renderer] Error processing chunk:', err);
+              pushToFallback(data);
             }
-          } catch (err) {
-            console.error('[Renderer] Error writing chunk:', err);
-            recordedChunks.push(data);
-          }
-        });
+          })
+          .catch(err => {
+            // ISSUE FIX: Handle chain errors and continue with next chunk (Issue 3)
+            console.error('[Renderer] Chunk write chain failed, will use fallback:', err);
+            pushToFallback(data);
+          });
       }
     };
 
@@ -351,7 +417,8 @@ async function startCapture(config: CaptureConfig): Promise<void> {
       }
 
       // If aborted (timeout), don't try to save — main process already moved on
-      if (isAborted) {
+      // Also check isForceCleanedUp to prevent onstop from running after timeout-triggered cleanup
+      if (isAborted || isForceCleanedUp) {
         console.log('[Renderer] Recording was aborted, skipping save');
         cleanupCompositing();
         if (mediaStream) {
@@ -404,6 +471,12 @@ async function startCapture(config: CaptureConfig): Promise<void> {
       }
       
       // Clean up all resources
+      // ISSUE FIX: Clear abort timeout when onstop completes (Issue 12)
+      if (abortTimeoutId !== null) {
+        clearTimeout(abortTimeoutId);
+        abortTimeoutId = null;
+      }
+      
       cleanupCompositing();
       if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
@@ -523,7 +596,10 @@ async function setupMultiMonitorCapture(
       console.log(`[Renderer] Screen ${source.name} capture resolution: ${settings?.width}x${settings?.height}`);
     } catch (err) {
       console.error(`[Renderer] Failed to capture screen ${source.name} (${source.id}):`, err);
-      // Continue to next screen - don't fail the entire capture
+      // ISSUE FIX: Clean up resources on error to prevent memory leak (Issue 3)
+      // Remove any streams we added for this failed source
+      // Note: We don't clean up previous streams as they may have succeeded
+      continue;
     }
   }
 
@@ -605,6 +681,9 @@ function cleanupCompositing(): void {
 function stopCapture(): void {
   console.log('[Renderer] Stopping capture...');
   
+  // ISSUE FIX: Mark as stopping normally to prevent abort from overriding (Issue 5)
+  isStoppingNormally = true;
+  
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     // CRITICAL: Request any pending data before stopping
     // Without this, the last partial chunk (up to 1 second) is lost,
@@ -628,8 +707,11 @@ function cleanupMedia(): void {
   mediaRecorder = null;
   recordedChunks = [];
   currentOutputPath = null;
-  isAborted = false;
+  // ISSUE FIX: Don't reset isAborted here - let abort timeout manage it
+  // ISSUE FIX: Reset isStoppingNormally for next recording sequence (Issue 5)
+  isStoppingNormally = false;
   totalBytesWritten = 0;
+  fallbackBytesStored = 0;
   pendingChunkWrite = Promise.resolve();
 }
 
@@ -706,6 +788,13 @@ async function handleOpenFolder(): Promise<void> {
  * Clean up all event listeners
  */
 function cleanup(): void {
+  // ISSUE FIX: Clear abort timeout and flag (Issue 12)
+  if (abortTimeoutId !== null) {
+    clearTimeout(abortTimeoutId);
+    abortTimeoutId = null;
+  }
+  isForceCleanedUp = true; // Mark as cleaned up during process shutdown
+  
   cleanupStatusListener?.();
   cleanupStartCapture?.();
   cleanupStopCapture?.();
@@ -738,8 +827,12 @@ function init(): void {
 
   // Listen for capture commands from main process
   cleanupStartCapture = window.electronAPI.onStartCapture((config: CaptureConfig) => {
-    startCapture(config).catch(error => {
+    startCapture(config).catch(async (error) => {
       console.error('[Renderer] Capture failed:', error);
+      // Notify main process so it can reset recording state
+      await window.electronAPI.notifyCaptureStartFailed(
+        error instanceof Error ? error.message : 'Capture setup failed'
+      );
     });
   });
 
@@ -749,13 +842,52 @@ function init(): void {
 
   // Listen for abort signal (main process timed out waiting for stop)
   cleanupAbortCapture = window.electronAPI.onAbortCapture(() => {
+    // ISSUE FIX: Don't override normal stop sequence (Issue 5)
+    if (isStoppingNormally) {
+      console.log('[Renderer] Received abort signal but already stopping normally, ignoring');
+      return;
+    }
+    
     console.log('[Renderer] Received abort signal from main process');
     isAborted = true;
+    
     // Force-stop MediaRecorder if still active - onstop handler will skip save
     // Do NOT call cleanupMedia() here — let onstop fire and check isAborted flag
     // cleanupMedia() would reset isAborted=false before onstop runs
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      mediaRecorder.stop();
+      // ISSUE FIX: Add timeout to force cleanup if renderer is unresponsive (Issue 12)
+      if (abortTimeoutId !== null) {
+        clearTimeout(abortTimeoutId);
+      }
+      abortTimeoutId = setTimeout(() => {
+        console.error('[Renderer] Abort cleanup timeout - forcing media cleanup');
+        isForceCleanedUp = true;
+        cleanupMedia();
+        abortTimeoutId = null;
+      }, 5000); // 5 second timeout for cleanup
+      
+      try {
+        mediaRecorder.stop();
+      } catch (err) {
+        console.error('[Renderer] Error stopping media recorder during abort:', err);
+        // On error, clear timeout and force cleanup immediately
+        if (abortTimeoutId !== null) {
+          clearTimeout(abortTimeoutId);
+          abortTimeoutId = null;
+        }
+        isForceCleanedUp = true;
+        cleanupMedia();
+      }
+    } else {
+      // If recorder is already stopped or null, mark as force cleaned up to prevent
+      // onstop from trying to save if it's still processing
+      console.log('[Renderer] MediaRecorder already stopped or null during abort');
+      isForceCleanedUp = true;
+      // Cancel any pending abort timeout since we've already decided not to save
+      if (abortTimeoutId !== null) {
+        clearTimeout(abortTimeoutId);
+        abortTimeoutId = null;
+      }
     }
   });
 

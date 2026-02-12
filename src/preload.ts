@@ -18,6 +18,7 @@ export interface ElectronAPI {
   appendRecordingChunk: (data: ArrayBuffer, outputPath: string) => Promise<IpcResult>;
   finalizeRecording: (outputPath: string) => Promise<IpcResult>;
   notifyCaptureStopped: (result: CaptureStoppedResult) => Promise<void>;
+  notifyCaptureStartFailed: (error: string) => Promise<void>;
   onStatusUpdate: (callback: (status: SystemStatus) => void) => () => void;
   onStartCapture: (callback: (config: CaptureConfig) => void) => () => void;
   onStopCapture: (callback: () => void) => () => void;
@@ -37,9 +38,11 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.invoke('append-recording-chunk', data, outputPath),
   finalizeRecording: (outputPath: string) =>
     ipcRenderer.invoke('finalize-recording', outputPath),
-  notifyCaptureStopped: (result: CaptureStoppedResult) => 
+  notifyCaptureStopped: (result: CaptureStoppedResult) =>
     ipcRenderer.invoke('capture-stopped', result),
-  
+  notifyCaptureStartFailed: (error: string) =>
+    ipcRenderer.invoke('capture-start-failed', error),
+
   // Return cleanup functions to prevent memory leaks
   onStatusUpdate: (callback: (status: SystemStatus) => void) => {
     const handler = (_event: IpcRendererEvent, status: SystemStatus) => callback(status);

@@ -46,6 +46,7 @@ export class NativeRecorder {
 
   /**
    * Calculate canvas dimensions for all displays combined
+   * ISSUE FIX: Validate canvas dimensions are within reasonable bounds (Issue 8)
    */
   public getCanvasDimensions(): { width: number; height: number; displays: Electron.Display[] } {
     const displays = screen.getAllDisplays();
@@ -61,9 +62,35 @@ export class NativeRecorder {
       maxY = Math.max(maxY, y + height);
     }
     
+    let width = maxX - minX;
+    let height = maxY - minY;
+    
+    // ISSUE FIX: Clamp dimensions to reasonable bounds
+    // Max 8K resolution (7680x4320) to prevent memory exhaustion
+    // Min 640x480 to ensure usable capture
+    const MAX_DIMENSION = 7680;
+    const MIN_DIMENSION = 640;
+    
+    if (width <= 0 || height <= 0) {
+      this.log(`WARNING: Invalid canvas dimensions calculated: ${width}x${height}, using fallback 1920x1080`);
+      width = 1920;
+      height = 1080;
+    } else if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+      const ratio = Math.min(MAX_DIMENSION / width, MAX_DIMENSION / height);
+      const newWidth = Math.floor(width * ratio);
+      const newHeight = Math.floor(height * ratio);
+      this.log(`WARNING: Canvas dimensions ${width}x${height} exceed max ${MAX_DIMENSION}, scaling to ${newWidth}x${newHeight}`);
+      width = newWidth;
+      height = newHeight;
+    } else if (width < MIN_DIMENSION || height < MIN_DIMENSION) {
+      this.log(`WARNING: Canvas dimensions ${width}x${height} below minimum ${MIN_DIMENSION}, using fallback 1920x1080`);
+      width = 1920;
+      height = 1080;
+    }
+    
     return {
-      width: maxX - minX,
-      height: maxY - minY,
+      width,
+      height,
       displays,
     };
   }
@@ -164,7 +191,11 @@ export class NativeRecorder {
     // Final fallback: first screen source
     if (!selectedSource) {
       selectedSource = sources[0];
-      this.log(`Warning: Using fallback source. Multi-monitor capture may only show primary display.`);
+      // ISSUE FIX: Add detailed warning about fallback source (Issue 9)
+      const sourceIds = sources.map(s => `${s.name} (${s.id})`).join(', ');
+      this.log(`WARNING: Using fallback source "${selectedSource.name}" (${selectedSource.id})`);
+      this.log(`         Available sources: ${sourceIds}`);
+      this.log(`         Multi-monitor capture may only show primary display`);
     }
     
     this.log(`Selected source for recording: "${selectedSource.name}" (${selectedSource.id}) [platform: ${platform}]`);
@@ -212,12 +243,14 @@ export class NativeRecorder {
   /**
    * Stop recording - signals renderer to stop capture, then converts to MP4
    */
-  public async stopRecording(mainWindow: BrowserWindow): Promise<string> {
+  public async stopRecording(mainWindow: BrowserWindow, timeoutMs?: number): Promise<string> {
     if (!this.isRecording) {
       throw new Error('Not currently recording');
     }
 
     this.log('Stopping recording...');
+
+    const stopTimeout = timeoutMs ?? APP_CONSTANTS.RECORDING_STOP_TIMEOUT_MS;
 
     // Signal renderer to stop and wait for file to be saved
     return new Promise((resolve, reject) => {
@@ -227,8 +260,10 @@ export class NativeRecorder {
         // Signal renderer to abort so it doesn't write a delayed orphaned file
         mainWindow.webContents.send('abort-capture');
         this.isRecording = false;
+        // Clear output path to prevent late capture-stopped from resolving with stale path
+        this.outputWebmPath = null;
         reject(new Error('Timeout waiting for recording to stop'));
-      }, APP_CONSTANTS.RECORDING_STOP_TIMEOUT_MS);
+      }, stopTimeout);
 
       // Set up resolver for capture-stopped event
       this.captureStoppedResolver = async (result: CaptureStoppedResult) => {

@@ -39,22 +39,39 @@ function loadExternalConfig(): void {
     if (configExists) {
       let configData = fs.readFileSync(configPath, 'utf-8');
       
-      // Strip UTF-8 BOM if present (Windows PowerShell adds this with -Encoding UTF8)
-      if (configData.charCodeAt(0) === 0xFEFF) {
-        configData = configData.slice(1);
-        log(`Stripped UTF-8 BOM from config file`);
+      // ISSUE FIX: Handle BOM more robustly - handle UTF-8 BOM (0xFEFF) and other encodings
+      // Windows PowerShell -Encoding UTF8 adds BOM; trim it if present
+      configData = configData.replace(/^\uFEFF/, '');
+      
+      log(`Config file loaded (${configData.length} chars after BOM strip)`);
+      
+      // ISSUE FIX: Wrap JSON.parse in try-catch to handle invalid JSON gracefully
+      let externalConfig: ExternalConfig;
+      try {
+        externalConfig = JSON.parse(configData);
+      } catch (parseErr) {
+        log(`Warning: Invalid JSON in config file, using defaults: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`);
+        externalConfig = {};
       }
       
-      log(`Config file contents: ${configData}`);
-      const externalConfig: ExternalConfig = JSON.parse(configData);
-      
       // Merge with defaults, validating values
+      // ISSUE FIX: Validate config values are within reasonable ranges
       if (typeof externalConfig.maxRecordingMinutes === 'number' && externalConfig.maxRecordingMinutes > 0) {
-        runtimeConfig.maxRecordingMinutes = externalConfig.maxRecordingMinutes;
+        // Clamp to 1 minute - 8 hours (reasonable for workflow capture)
+        const clamped = Math.max(1, Math.min(480, Math.floor(externalConfig.maxRecordingMinutes)));
+        if (clamped !== externalConfig.maxRecordingMinutes) {
+          log(`Warning: maxRecordingMinutes ${externalConfig.maxRecordingMinutes} outside range [1-480], clamped to ${clamped}`);
+        }
+        runtimeConfig.maxRecordingMinutes = clamped;
         log(`Applied maxRecordingMinutes: ${runtimeConfig.maxRecordingMinutes}`);
       }
       if (typeof externalConfig.videoBitrateMbps === 'number' && externalConfig.videoBitrateMbps > 0) {
-        runtimeConfig.videoBitrateMbps = externalConfig.videoBitrateMbps;
+        // Clamp to 1-50 Mbps (reasonable for H.265 or VP9)
+        const clamped = Math.max(1, Math.min(50, Math.floor(externalConfig.videoBitrateMbps)));
+        if (clamped !== externalConfig.videoBitrateMbps) {
+          log(`Warning: videoBitrateMbps ${externalConfig.videoBitrateMbps} outside range [1-50], clamped to ${clamped}`);
+        }
+        runtimeConfig.videoBitrateMbps = clamped;
         log(`Applied videoBitrateMbps: ${runtimeConfig.videoBitrateMbps}`);
       }
       
@@ -94,9 +111,16 @@ let fileManager: FileManager | null = null;
 let recordingStartTime: number | null = null;
 let recordingTimer: NodeJS.Timeout | null = null;
 let maxDurationTimer: NodeJS.Timeout | null = null;
+// ISSUE FIX: Track recording config at time of recording start (Issue 8)
+let recordingMaxDurationMs: number = 0;
+let recordingVideoBitrate: number = 0;
 let isQuitting = false;
 let normalTrayIcon: Electron.NativeImage | null = null;
 let pauseTrayIcon: Electron.NativeImage | null = null;
+// ISSUE FIX: Single source of truth for recording state (Issue 14)
+let isRecordingState = false;
+// Concurrency guard for toggleRecording
+let isToggling = false;
 
 function log(message: string): void {
   console.log(`[Main] ${message}`);
@@ -184,9 +208,10 @@ function createWindow(): void {
     log(`Renderer process gone: ${details.reason}`);
     if (details.reason === 'crashed' || details.reason === 'killed') {
       // Reset recording state if renderer crashes during recording
-      if (nativeRecorder?.getRecordingStatus()) {
+      if (isRecordingState) {
         stopRecordingTimer();
-        nativeRecorder.reset();
+        isRecordingState = false;
+        nativeRecorder?.reset();
         sessionManager?.endCurrentSession();
       }
       currentSystemState = 'error';
@@ -208,12 +233,9 @@ function createWindow(): void {
     if (!isQuitting) {
       event.preventDefault();
       
-      // Check both recorder status AND system state (recording state is set before recorder starts)
-      const isRecording = nativeRecorder?.getRecordingStatus() ?? false;
-      const isRecordingState = currentSystemState === 'recording' || currentSystemState === 'processing';
-      
-      if (isRecording || isRecordingState) {
-        // While recording or processing: minimize (stays visible in taskbar)
+      // ISSUE FIX: Single source of truth - use isRecordingState (Issue 14)
+      if (isRecordingState) {
+        // While recording: minimize (stays visible in taskbar)
         mainWindow?.minimize();
         log('Window minimized - recording continues, visible in taskbar');
       } else {
@@ -237,12 +259,12 @@ let currentSystemState: SystemState = 'starting';
 function updateTrayMenu(): void {
   if (!tray) return;
   
-  const isRecording = nativeRecorder?.getRecordingStatus() ?? false;
+  // ISSUE FIX: Use single source of truth for recording state (Issue 14)
   const isProcessing = currentSystemState === 'processing';
   
   const contextMenu = Menu.buildFromTemplate([
     { 
-      label: isProcessing ? 'Saving...' : (isRecording ? 'Stop Recording' : 'Start Recording'),
+      label: isProcessing ? 'Saving...' : (isRecordingState ? 'Stop Recording' : 'Start Recording'),
       enabled: !isProcessing, // Disable menu item while processing
       click: async () => {
         await toggleRecording();
@@ -259,7 +281,7 @@ function updateTrayMenu(): void {
     { type: 'separator' },
     { 
       label: 'Quit', 
-      enabled: !isRecording && !isProcessing, // Disable quit while recording or processing
+      enabled: !isRecordingState && !isProcessing, // Disable quit while recording or processing
       click: () => {
         app.quit();
       }
@@ -268,7 +290,7 @@ function updateTrayMenu(): void {
   
   const tooltip = isProcessing 
     ? 'Workflow Capture - Saving...'
-    : isRecording 
+    : isRecordingState 
       ? 'Workflow Capture - Recording (Click to stop)' 
       : 'Workflow Capture (Click to start recording)';
   tray.setToolTip(tooltip);
@@ -280,71 +302,87 @@ function updateTrayMenu(): void {
  * Called by tray icon click and tray menu
  */
 async function toggleRecording(): Promise<void> {
-  const isRecording = nativeRecorder?.getRecordingStatus() ?? false;
-  const isProcessing = currentSystemState === 'processing';
-  
-  if (isProcessing) {
-    // Currently saving, ignore
+  if (isToggling) {
+    log('Toggle already in progress, ignoring');
     return;
   }
-  
-  if (!nativeRecorder || !mainWindow || !sessionManager) {
-    log('Cannot toggle recording: system not initialized');
-    return;
-  }
-  
-  if (isRecording) {
-    // Stop recording
-    let outputPath: string | null = null;
-    try {
-      stopRecordingTimer();
-      currentSystemState = 'processing';
-      updateTrayMenu();
-      updateTrayIcon();
-      sendStatus({ state: 'processing', message: 'Saving...' });
-      
-      outputPath = await nativeRecorder.stopRecording(mainWindow);
-      await sessionManager.endCurrentSession();
-      
-      log(`Recording stopped, saved to: ${outputPath}`);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      log(`Failed to stop recording: ${errorMessage}`);
+  isToggling = true;
+
+  try {
+    const isProcessing = currentSystemState === 'processing';
+
+    if (isProcessing) {
+      // Currently saving, ignore
+      return;
     }
-    
-    currentSystemState = 'idle';
-    updateTrayMenu();
-    updateTrayIcon();
-    sendStatus({ state: 'idle', message: 'Ready' });
-    
-    if (outputPath) {
-      sendRecordingSavedNotification(outputPath);
+
+    if (!nativeRecorder || !mainWindow || !sessionManager) {
+      log('Cannot toggle recording: system not initialized');
+      return;
     }
-  } else {
-    // Start recording with empty note (quick capture from tray/shortcut)
-    try {
-      // Set recording state BEFORE starting capture to prevent window hiding
-      currentSystemState = 'recording';
-      updateTrayMenu();
-      updateTrayIcon();
-      
-      const recordingPath = await sessionManager.startSession('');
-      nativeRecorder.setOutputPath(recordingPath);
-      await nativeRecorder.startRecording(mainWindow, getVideoBitrate());
-      
-      startRecordingTimer();
-      sendStatus({ state: 'recording', message: 'Recording', recordingDuration: 0 });
-      
-      log(`Recording started: ${recordingPath}`);
-    } catch (error) {
-      // Reset state on failure
+
+    if (isRecordingState) {
+      // Stop recording
+      let outputPath: string | null = null;
+      try {
+        stopRecordingTimer();
+        isRecordingState = false;
+        currentSystemState = 'processing';
+        updateTrayMenu();
+        updateTrayIcon();
+        sendStatus({ state: 'processing', message: 'Saving...' });
+
+        outputPath = await nativeRecorder.stopRecording(mainWindow);
+        await sessionManager.endCurrentSession();
+
+        log(`Recording stopped, saved to: ${outputPath}`);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        log(`Failed to stop recording: ${errorMessage}`);
+      }
+
       currentSystemState = 'idle';
       updateTrayMenu();
       updateTrayIcon();
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      log(`Failed to start recording: ${errorMessage}`);
-      sendStatus({ state: 'error', message: 'Failed to start recording', error: errorMessage });
+      sendStatus({ state: 'idle', message: 'Ready' });
+
+      if (outputPath) {
+        sendRecordingSavedNotification(outputPath);
+      }
+    } else {
+      // Start recording with empty note (quick capture from tray/shortcut)
+      try {
+        // ISSUE FIX: Store recording config at start time (Issue 8)
+        recordingMaxDurationMs = runtimeConfig.maxRecordingMinutes * 60 * 1000;
+        recordingVideoBitrate = runtimeConfig.videoBitrateMbps * 1_000_000;
+
+        // Set recording state BEFORE starting capture to prevent window hiding
+        isRecordingState = true;
+        currentSystemState = 'recording';
+        updateTrayMenu();
+        updateTrayIcon();
+
+        const recordingPath = await sessionManager.startSession('');
+        nativeRecorder.setOutputPath(recordingPath);
+        await nativeRecorder.startRecording(mainWindow, recordingVideoBitrate);
+
+        startRecordingTimer();
+        sendStatus({ state: 'recording', message: 'Recording', recordingDuration: 0 });
+
+        log(`Recording started: ${recordingPath}`);
+      } catch (error) {
+        // Reset state on failure
+        isRecordingState = false;
+        currentSystemState = 'idle';
+        updateTrayMenu();
+        updateTrayIcon();
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        log(`Failed to start recording: ${errorMessage}`);
+        sendStatus({ state: 'error', message: 'Failed to start recording', error: errorMessage });
+      }
     }
+  } finally {
+    isToggling = false;
   }
 }
 
@@ -402,16 +440,15 @@ function loadTrayIcons(): void {
 function updateTrayIcon(): void {
   if (!tray) return;
   
-  const isRecording = nativeRecorder?.getRecordingStatus() ?? false;
-  
-  if (isRecording && pauseTrayIcon) {
+  // ISSUE FIX: Use single source of truth for recording state (Issue 14)
+  if (isRecordingState && pauseTrayIcon) {
     tray.setImage(pauseTrayIcon);
   } else if (normalTrayIcon) {
     tray.setImage(normalTrayIcon);
   }
   
   // Also update desktop shortcut icon
-  updateDesktopShortcutIcon(isRecording);
+  updateDesktopShortcutIcon(isRecordingState);
 }
 
 /**
@@ -421,58 +458,72 @@ function updateTrayIcon(): void {
 function updateDesktopShortcutIcon(isRecording: boolean): void {
   // Only on Windows
   if (process.platform !== 'win32') return;
-  
-  try {
-    const desktopPath = app.getPath('desktop');
-    const shortcutPath = path.join(desktopPath, 'RECORD.lnk');
-    
-    // Check if shortcut exists
-    if (!fs.existsSync(shortcutPath)) {
-      return;
-    }
-    
-    // Determine which icon to use
-    let iconPath: string;
-    if (app.isPackaged) {
-      iconPath = isRecording 
-        ? path.join(process.resourcesPath, 'icon-pause.ico')
-        : path.join(process.resourcesPath, 'icon.ico');
-    } else {
-      iconPath = isRecording
-        ? path.join(__dirname, '..', '..', 'build', 'icon-pause.ico')
-        : path.join(__dirname, '..', '..', 'build', 'icon.ico');
-    }
-    
-    // Use Electron's shell.writeShortcutLink to update the shortcut
-    const { shell } = require('electron');
-    const shortcutDetails = shell.readShortcutLink(shortcutPath);
-    
-    shell.writeShortcutLink(shortcutPath, 'update', {
-      ...shortcutDetails,
-      icon: iconPath,
-      iconIndex: 0
-    });
-    
-    // Force Windows to refresh the desktop icon cache immediately
-    // Use ie4uinit which is the fastest method for icon refresh
-    const { exec } = require('child_process');
-    exec('ie4uinit.exe -show', { windowsHide: true }, (error: Error | null) => {
-      if (error) {
+
+  // ISSUE FIX: Use async operations to not block main thread (Issue 15)
+  (async () => {
+    try {
+      const desktopPath = app.getPath('desktop');
+      const shortcutPath = path.join(desktopPath, 'RECORD.lnk');
+      
+      // Check if shortcut exists
+      if (!fs.existsSync(shortcutPath)) {
+        return;
+      }
+      
+      // Determine which icon to use
+      let iconPath: string;
+      if (app.isPackaged) {
+        iconPath = isRecording 
+          ? path.join(process.resourcesPath, 'icon-pause.ico')
+          : path.join(process.resourcesPath, 'icon.ico');
+      } else {
+        iconPath = isRecording
+          ? path.join(__dirname, '..', '..', 'build', 'icon-pause.ico')
+          : path.join(__dirname, '..', '..', 'build', 'icon.ico');
+      }
+      
+      // Use Electron's shell.writeShortcutLink to update the shortcut
+      const { shell } = require('electron');
+      const shortcutDetails = shell.readShortcutLink(shortcutPath);
+      
+      shell.writeShortcutLink(shortcutPath, 'update', {
+        ...shortcutDetails,
+        icon: iconPath,
+        iconIndex: 0
+      });
+      
+      // Force Windows to refresh the desktop icon cache immediately
+      // Use ie4uinit which is the fastest method for icon refresh
+      const { execFile } = require('child_process');
+      try {
+        await new Promise<void>((resolve, reject) => {
+          execFile('ie4uinit.exe', ['-show'], { windowsHide: true }, (error: Error | null) => {
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          });
+        });
+      } catch (execError) {
         // Fallback: touch the shortcut file to trigger refresh
         try {
           const now = new Date();
-          fs.utimesSync(shortcutPath, now, now);
-        } catch (e) {
-          // Ignore
+          await fs.promises.utimes(shortcutPath, now, now);
+          console.log(`[Icon] Fallback: touched shortcut to trigger refresh`);
+        } catch (touchErr) {
+          console.error(`[Icon] Failed to refresh icon:`, touchErr);
         }
       }
-    });
-    
-    log(`Desktop shortcut icon updated: ${isRecording ? 'pause' : 'normal'}`);
-  } catch (error) {
-    // Silently fail - shortcut icon update is not critical
-    log(`Failed to update desktop shortcut icon: ${error}`);
-  }
+      
+      log(`Desktop shortcut icon updated: ${isRecording ? 'pause' : 'normal'}`);
+    } catch (error) {
+      // Silently fail - shortcut icon update is not critical
+      log(`Failed to update desktop shortcut icon: ${error}`);
+    }
+  })().catch(err => {
+    log(`Icon update background task error: ${err}`);
+  });
 }
 
 function createTray(): void {
@@ -513,6 +564,36 @@ async function initialize(): Promise<void> {
     await fileManager.ensureSessionsDirectory();
     log('File manager initialized');
 
+    // ISSUE FIX: Clean up stale .tmp files on startup (Issue 13) - Use async to not block startup
+    log('Cleaning up stale temporary files...');
+    (async () => {
+      try {
+        const sessionsPath = fileManager!.getSessionsPath();
+        const files = await fs.promises.readdir(sessionsPath);
+        const staleCutoff = Date.now() - (30 * 60 * 1000); // 30 minutes
+        
+        for (const file of files) {
+          if (file.endsWith('.webm.tmp')) {
+            const filePath = path.join(sessionsPath, file);
+            try {
+              const stats = await fs.promises.stat(filePath);
+              if (stats.mtimeMs < staleCutoff) {
+                await fs.promises.unlink(filePath);
+                log(`Cleaned up stale temp file: ${file}`);
+              }
+            } catch (err) {
+              log(`Warning: Could not clean up ${file}: ${err}`);
+            }
+          }
+        }
+      } catch (err) {
+        log(`Non-critical: Stale file cleanup skipped: ${err}`);
+      }
+    })().catch(err => {
+      log(`Stale file cleanup error: ${err}`);
+    });
+    // Don't await this - let it run in background
+
     // Initialize session manager
     log('Initializing session manager...');
     sessionManager = new SessionManager(fileManager);
@@ -541,13 +622,12 @@ function startRecordingTimer(): void {
     }
   }, APP_CONSTANTS.TIMER_INTERVAL_MS);
   
-  // Set up max duration timer - auto-stop after configured duration
-  const maxDurationMs = getMaxRecordingDurationMs();
-  log(`Setting up max duration timer: ${maxDurationMs}ms (${runtimeConfig.maxRecordingMinutes} minutes)`);
+  // ISSUE FIX: Use recording config stored at start time (Issue 8)
+  log(`Setting up max duration timer: ${recordingMaxDurationMs}ms (${recordingMaxDurationMs / 60 / 1000} minutes)`);
   maxDurationTimer = setTimeout(async () => {
-    log(`Max recording duration (${runtimeConfig.maxRecordingMinutes} minutes) reached, auto-stopping...`);
+    log(`Max recording duration reached, auto-stopping...`);
     await autoStopRecording();
-  }, maxDurationMs);
+  }, recordingMaxDurationMs);
 }
 
 function stopRecordingTimer(): void {
@@ -572,14 +652,15 @@ async function autoStopRecording(): Promise<void> {
     return;
   }
   
-  const isRecording = nativeRecorder.getRecordingStatus();
-  if (!isRecording) {
+  // ISSUE FIX: Use recording state flag (Issue 14)
+  if (!isRecordingState) {
     log('Auto-stop called but not recording');
     return;
   }
   
   try {
     stopRecordingTimer();
+    isRecordingState = false;
     currentSystemState = 'processing';
     updateTrayMenu();
     updateTrayIcon();
@@ -604,6 +685,7 @@ async function autoStopRecording(): Promise<void> {
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     log(`Failed to auto-stop recording: ${errorMessage}`);
+    isRecordingState = false;
     currentSystemState = 'idle';
     updateTrayMenu();
     updateTrayIcon();
@@ -618,8 +700,23 @@ function setupIpcHandlers(): void {
         throw new Error('System not initialized');
       }
 
+      // ISSUE FIX: Verify disk space before recording (Issue 6)
+      if (!fileManager) {
+        throw new Error('File manager not initialized');
+      }
+      
+      const hasDiskSpace = await fileManager.verifyMinimumDiskSpace(50); // 50MB minimum
+      if (!hasDiskSpace) {
+        throw new Error('Insufficient disk space to start recording (need 50MB)');
+      }
+
+      // ISSUE FIX: Store recording config at start time (Issue 8)
+      recordingMaxDurationMs = runtimeConfig.maxRecordingMinutes * 60 * 1000;
+      recordingVideoBitrate = runtimeConfig.videoBitrateMbps * 1_000_000;
+
       // Set recording state BEFORE starting capture to prevent window hiding
       // This ensures the close handler knows we're in recording mode during capture setup
+      isRecordingState = true;
       currentSystemState = 'recording';
       updateTrayMenu();
       updateTrayIcon();
@@ -630,8 +727,8 @@ function setupIpcHandlers(): void {
       // Set full recording path
       nativeRecorder.setOutputPath(recordingPath);
       
-      // Start recording - pass video bitrate from config
-      await nativeRecorder.startRecording(mainWindow, getVideoBitrate());
+      // Start recording - pass video bitrate from stored config
+      await nativeRecorder.startRecording(mainWindow, recordingVideoBitrate);
       
       startRecordingTimer();
       sendStatus({ state: 'recording', message: 'Recording', recordingDuration: 0 });
@@ -645,6 +742,7 @@ function setupIpcHandlers(): void {
       return { success: true, sessionId: recordingPath };
     } catch (error) {
       // Reset state on failure
+      isRecordingState = false;
       currentSystemState = 'idle';
       updateTrayMenu();
       updateTrayIcon();
@@ -664,6 +762,7 @@ function setupIpcHandlers(): void {
       stopRecordingTimer();
       
       // Update UI to processing state
+      isRecordingState = false;
       currentSystemState = 'processing';
       updateTrayMenu();
       updateTrayIcon();
@@ -688,6 +787,7 @@ function setupIpcHandlers(): void {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       log(`Failed to stop recording: ${errorMessage}`);
       // Reset to idle state on error so user can try again
+      isRecordingState = false;
       currentSystemState = 'idle';
       sendStatus({ state: 'idle', message: 'Ready' });
       // Update tray to show idle state
@@ -698,20 +798,14 @@ function setupIpcHandlers(): void {
   });
 
   ipcMain.handle('get-status', async () => {
-    try {
-      if (!nativeRecorder) {
-        return { state: 'error', message: 'Not initialized' };
-      }
-
-      const recording = nativeRecorder.getRecordingStatus();
-      if (recording) {
-        return { state: 'recording', message: 'Recording' };
-      }
-      return { state: 'idle', message: 'Ready' };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      return { state: 'error', message: 'Error', error: errorMessage };
-    }
+    const stateMessages: Record<SystemState, string> = {
+      starting: 'Starting...',
+      idle: 'Ready',
+      recording: 'Recording',
+      processing: 'Saving...',
+      error: 'Error',
+    };
+    return { state: currentSystemState, message: stateMessages[currentSystemState] };
   });
 
   ipcMain.handle('open-sessions-folder', async () => {
@@ -727,32 +821,76 @@ function setupIpcHandlers(): void {
     }
   });
 
-  // Note: export-sessions handler removed - extraction handled by RMM script directly
+  // Handle renderer reporting that capture setup failed (e.g. getUserMedia denied)
+  ipcMain.handle('capture-start-failed', async (_event, error: string) => {
+    log(`Renderer reported capture start failure: ${error}`);
+    if (isRecordingState) {
+      stopRecordingTimer();
+      isRecordingState = false;
+      currentSystemState = 'idle';
+      nativeRecorder?.reset();
+      sessionManager?.endCurrentSession();
+      updateTrayMenu();
+      updateTrayIcon();
+      sendStatus({ state: 'error', message: 'Capture failed', error });
+    }
+  });
+
+  // Async path validation helper
+  // ISSUE FIX: Improved path traversal validation using path.relative()
+  async function validatePathWithinDirectory(filePath: string, allowedDir: string, allowedExtensions: string[]): Promise<void> {
+    const resolvedFile = path.resolve(filePath);
+    const resolvedDir = path.resolve(allowedDir);
+
+    // Resolve symlinks for the directory (must exist)
+    let realDir: string;
+    try {
+      realDir = await fs.promises.realpath(resolvedDir);
+    } catch (err) {
+      throw new Error(`Directory does not exist: ${err}`);
+    }
+
+    // For file: try to resolve real path if it exists, otherwise validate using relative path
+    let realFile: string;
+    try {
+      realFile = await fs.promises.realpath(resolvedFile);
+    } catch (err) {
+      // File doesn't exist yet, validate using path.relative()
+      // If relative path starts with .., it's outside the allowed directory
+      const relativePath = path.relative(realDir, resolvedFile);
+      if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+        throw new Error(`Path is outside allowed directory: ${filePath}`);
+      }
+      realFile = resolvedFile;
+    }
+
+    // Verify the real file path is within the real directory
+    const relativePath = path.relative(realDir, realFile);
+    if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+      throw new Error(`Path is outside allowed directory: ${filePath}`);
+    }
+
+    // Validate file extension
+    const hasValidExtension = allowedExtensions.some(ext => realFile.endsWith(ext));
+    if (!hasValidExtension) {
+      throw new Error(`Invalid file extension. Allowed: ${allowedExtensions.join(', ')}`);
+    }
+  }
 
   // Handle recording data from renderer
   // Note: For large recordings, this can receive hundreds of MB of data
   ipcMain.handle('save-recording-chunk', async (_event, chunk: ArrayBuffer, outputPath: string) => {
     try {
-      // SECURITY: Validate that outputPath is within the allowed sessions directory
-      // This prevents path traversal attacks from a compromised renderer
+      // ISSUE FIX: Validate that outputPath is within the allowed sessions directory (Issue 2)
       if (!fileManager) {
         throw new Error('File manager not initialized');
       }
       
       const sessionsPath = fileManager.getSessionsPath();
-      const resolvedOutput = path.resolve(outputPath);
-      const resolvedSessions = path.resolve(sessionsPath);
-      
-      // Ensure the output path starts with the sessions directory
-      // and ends with .webm extension
-      if (!resolvedOutput.startsWith(resolvedSessions + path.sep) || !resolvedOutput.endsWith('.webm')) {
-        log(`SECURITY: Rejected invalid output path: ${outputPath}`);
-        throw new Error('Invalid output path - must be within sessions directory');
-      }
-      
+      await validatePathWithinDirectory(outputPath, sessionsPath, ['.webm', '.webm.tmp']);
+
       log(`Saving recording to ${outputPath} (${(chunk.byteLength / 1024 / 1024).toFixed(2)} MB)`);
-      // Use writeFile instead of appendFile since we receive the complete recording
-      fs.writeFileSync(outputPath, Buffer.from(chunk));
+      await fs.promises.writeFile(outputPath, Buffer.from(chunk));
       log(`Recording saved successfully`);
       return { success: true };
     } catch (error) {
@@ -771,16 +909,10 @@ function setupIpcHandlers(): void {
       
       const sessionsPath = fileManager.getSessionsPath();
       const tmpPath = outputPath + '.tmp';
-      const resolvedOutput = path.resolve(tmpPath);
-      const resolvedSessions = path.resolve(sessionsPath);
-      
-      if (!resolvedOutput.startsWith(resolvedSessions + path.sep)) {
-        log(`SECURITY: Rejected invalid output path: ${outputPath}`);
-        throw new Error('Invalid output path - must be within sessions directory');
-      }
-      
+      await validatePathWithinDirectory(tmpPath, sessionsPath, ['.webm.tmp']);
+
       // Append chunk to temp file
-      fs.appendFileSync(tmpPath, Buffer.from(chunk));
+      await fs.promises.appendFile(tmpPath, Buffer.from(chunk));
       return { success: true };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -798,26 +930,27 @@ function setupIpcHandlers(): void {
       
       const sessionsPath = fileManager.getSessionsPath();
       const tmpPath = outputPath + '.tmp';
-      const resolvedOutput = path.resolve(outputPath);
-      const resolvedSessions = path.resolve(sessionsPath);
       
-      if (!resolvedOutput.startsWith(resolvedSessions + path.sep) || !resolvedOutput.endsWith('.webm')) {
-        log(`SECURITY: Rejected invalid output path: ${outputPath}`);
-        throw new Error('Invalid output path - must be within sessions directory');
-      }
+      // ISSUE FIX: Validate both paths before finalization
+      await validatePathWithinDirectory(tmpPath, sessionsPath, ['.webm.tmp']);
+      await validatePathWithinDirectory(outputPath, sessionsPath, ['.webm']);
 
-      if (!fs.existsSync(tmpPath)) {
+      let tmpSize: number;
+      try {
+        const stats = await fs.promises.stat(tmpPath);
+        tmpSize = stats.size;
+      } catch {
         throw new Error(`Temp recording file not found: ${tmpPath}`);
       }
 
-      const tmpSize = fs.statSync(tmpPath).size;
+      // ISSUE FIX: Check for empty recording files (Issue 7)
       if (tmpSize === 0) {
-        fs.unlinkSync(tmpPath);
-        throw new Error('Temp recording file is empty');
+        await fs.promises.unlink(tmpPath);
+        throw new Error('Temp recording file is empty - no video data was captured');
       }
 
       // Rename .webm.tmp -> .webm atomically
-      fs.renameSync(tmpPath, outputPath);
+      await fs.promises.rename(tmpPath, outputPath);
       log(`Recording finalized: ${outputPath} (${(tmpSize / 1024 / 1024).toFixed(2)} MB)`);
       return { success: true };
     } catch (error) {
@@ -827,21 +960,6 @@ function setupIpcHandlers(): void {
     }
   });
 
-  ipcMain.handle('get-screen-sources', async () => {
-    try {
-      if (!nativeRecorder) {
-        throw new Error('Recorder not initialized');
-      }
-      const sources = await nativeRecorder.getScreenSources();
-      return { 
-        success: true, 
-        sources: sources.map(s => ({ id: s.id, name: s.name })) 
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      return { success: false, error: errorMessage };
-    }
-  });
 }
 
 // Single instance lock
@@ -853,19 +971,17 @@ if (!gotTheLock) {
 } else {
   app.on('second-instance', async () => {
     log('Second instance detected (desktop shortcut clicked)');
-    
-    const isRecording = nativeRecorder?.getRecordingStatus() ?? false;
-    
-    if (isRecording) {
+
+    if (isRecordingState) {
       // If recording, stop it
       await toggleRecording();
     }
-    
+
     // Always show and focus the window
     showAndFocusWindow();
-    
-    // If not recording, signal renderer to focus the task description input
-    if (!isRecording && mainWindow && !mainWindow.isDestroyed()) {
+
+    // Check CURRENT state after toggle (not a stale captured value)
+    if (!isRecordingState && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('focus-task-input');
     }
   });
@@ -909,11 +1025,12 @@ if (!gotTheLock) {
 
     if (nativeRecorder) {
       try {
-        const isRecording = nativeRecorder.getRecordingStatus();
-        if (isRecording && mainWindow && !mainWindow.isDestroyed()) {
+        if (isRecordingState && mainWindow && !mainWindow.isDestroyed()) {
           log('Stopping active recording...');
-          await nativeRecorder.stopRecording(mainWindow);
-          await sessionManager?.endCurrentSession();
+          isRecordingState = false;
+          // Use shorter timeout (8s) to leave 2s buffer before 10s force-quit
+          await nativeRecorder.stopRecording(mainWindow, 8000);
+          sessionManager?.endCurrentSession();
         }
       } catch (error) {
         log(`Error during recording cleanup: ${error}`);
