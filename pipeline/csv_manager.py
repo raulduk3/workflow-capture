@@ -140,6 +140,7 @@ def build_row(
 
     # From Gemini analysis
     if gemini_analysis:
+        row["workflow_description"] = gemini_analysis.get("workflow_description", "")
         row["primary_app"] = gemini_analysis.get("primary_app", "")
         row["app_sequence"] = gemini_analysis.get("app_sequence", "[]")
         row["detected_actions"] = gemini_analysis.get("detected_actions", "[]")
@@ -148,6 +149,7 @@ def build_row(
         row["automation_score"] = gemini_analysis.get("automation_score", 0.0)
         row["workflow_category"] = gemini_analysis.get("workflow_category", "")
     else:
+        row["workflow_description"] = ""
         row["primary_app"] = ""
         row["app_sequence"] = "[]"
         row["detected_actions"] = "[]"

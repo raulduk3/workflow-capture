@@ -72,6 +72,7 @@ Analyze all the provided screenshots and extract the following information. Look
 Return your analysis as a JSON object with exactly these fields:
 
 {{
+    "workflow_description": "A 1-2 sentence description of what the user accomplished in this workflow (e.g., 'User exported data from Excel, opened Outlook, and emailed a report to their manager', 'User navigated through Procore to review project invoices and mark them as approved')",
     "primary_app": "The application that appears most frequently across the screenshots (e.g., 'Excel', 'Outlook', 'Procore', 'Chrome', 'SAP')",
     "app_sequence": ["Ordered list of distinct applications used, in the order they first appear"],
     "detected_actions": ["List of actions observed (e.g., 'data entry', 'copy-paste', 'form filling', 'email reading', 'file navigation', 'report generation', 'approval workflow', 'manual calculation')"],
@@ -248,7 +249,7 @@ def _parse_response(response_text: str, video_id: str) -> Optional[dict]:
             return None
 
     # Validate required fields
-    required = ["primary_app", "app_sequence", "detected_actions",
+    required = ["workflow_description", "primary_app", "app_sequence", "detected_actions",
                  "friction_events", "automation_score", "workflow_category"]
 
     for field in required:
@@ -258,6 +259,7 @@ def _parse_response(response_text: str, video_id: str) -> Optional[dict]:
 
     # Normalize types
     result = {
+        "workflow_description": str(data.get("workflow_description", "")),
         "primary_app": str(data.get("primary_app", "Unknown")),
         "app_sequence": _ensure_json_list(data.get("app_sequence", [])),
         "detected_actions": _ensure_json_list(data.get("detected_actions", [])),
@@ -276,6 +278,7 @@ def _parse_response(response_text: str, video_id: str) -> Optional[dict]:
 def _default_value(field: str):
     """Return a sensible default for missing fields."""
     defaults = {
+        "workflow_description": "",
         "primary_app": "Unknown",
         "app_sequence": [],
         "detected_actions": [],

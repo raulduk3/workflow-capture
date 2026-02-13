@@ -133,7 +133,8 @@ CSV_COLUMNS = [
     # From video file (2 fields)
     "duration_sec",
     "file_size_mb",
-    # From Gemini Vision (7 fields)
+    # From Gemini Vision (8 fields)
+    "workflow_description",
     "primary_app",
     "app_sequence",
     "detected_actions",
