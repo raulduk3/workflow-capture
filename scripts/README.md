@@ -10,6 +10,108 @@ PowerShell scripts for deploying and managing L7S Workflow Capture via Ninja RMM
 | `Uninstall-WorkflowCapture.ps1` | Silent removal from client machines | Administrator |
 | `Extract-WorkflowCaptures.ps1` | Collect recordings from all users | Administrator |
 | `Deploy-WorkflowConfig.ps1` | Deploy/update configuration remotely | Administrator |
+| `Run-WorkflowPipeline.ps1` | Full analysis pipeline (convert + Gemini) | Administrator |
+| `Schedule-WorkflowPipeline.ps1` | Register daily Task Scheduler job | Administrator |
+
+---
+
+## Schedule-WorkflowPipeline.ps1
+
+**Registers a Windows Scheduled Task that runs the full analysis pipeline daily on the utility server.**
+
+The pipeline converts `.webm` recordings from the network share to `.mp4`, then runs Gemini Vision analysis to produce structured workflow insights.
+
+### How It Works
+
+```
+  Ninja RMM (daily)                Utility Server (daily, 2 AM)
+  ┌──────────────┐                 ┌──────────────────────────────────┐
+  │ Client PCs   │    .webm        │ Schedule-WorkflowPipeline.ps1    │
+  │ Extract      │──────────►      │  └─► Run-WorkflowPipeline.ps1   │
+  │ .webm to     │  \\bulley-fs1   │       ├─ Stage 1: webm → mp4    │
+  │ network share│  \workflow\     │       └─ Stage 2: Gemini → CSV  │
+  └──────────────┘                 └──────────────────────────────────┘
+```
+
+### Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `-Time` | String | `"02:00"` | Daily trigger time (24h format) |
+| `-RunAs` | String | Current user | Service account (prompted for password) |
+| `-GenerateReport` | Switch | `$false` | Include insights report generation |
+| `-Force` | Switch | `$false` | Overwrite existing scheduled task |
+| `-Uninstall` | Switch | `$false` | Remove the scheduled task |
+| `-RunNow` | Switch | `$false` | Trigger the task immediately |
+
+### Features
+
+- **Lock file** prevents overlapping runs
+- **Stale lock auto-clear** after 6 hours (handles crashed runs)
+- **Transcript logging** — full audit trail in `C:\temp\WorkflowProcessing\logs\`
+- **Health marker** — `last_run.json` for monitoring tools
+- **Retry on failure** — 3 retries with 30-minute intervals
+- **4-hour execution time limit**
+- **Log rotation** — old logs auto-cleaned after 14 days
+
+### Examples
+
+```powershell
+# Register daily task at 2 AM (default)
+.\Schedule-WorkflowPipeline.ps1
+
+# Register at 4 AM with report generation
+.\Schedule-WorkflowPipeline.ps1 -Time "04:00" -GenerateReport
+
+# Run as a service account (password prompted)
+.\Schedule-WorkflowPipeline.ps1 -RunAs "DOMAIN\svc-workflow"
+
+# Update schedule to 3 AM
+.\Schedule-WorkflowPipeline.ps1 -Force -Time "03:00"
+
+# Trigger immediately (for testing)
+.\Schedule-WorkflowPipeline.ps1 -RunNow
+
+# Remove the scheduled task
+.\Schedule-WorkflowPipeline.ps1 -Uninstall
+```
+
+### Monitoring
+
+```powershell
+# Check last run status
+Get-Content C:\temp\WorkflowProcessing\logs\last_run.json
+
+# View today's log
+Get-Content C:\temp\WorkflowProcessing\logs\pipeline_$(Get-Date -Format 'yyyy-MM-dd').log
+
+# List recent scheduled logs
+Get-ChildItem C:\temp\WorkflowProcessing\logs\scheduled_*.log | Sort-Object LastWriteTime -Descending | Select-Object -First 5
+
+# Check task status in Task Scheduler
+Get-ScheduledTask -TaskName "L7S-WorkflowAnalysisPipeline" -TaskPath "\L7S\" | Get-ScheduledTaskInfo
+```
+
+### Setup on Utility Server
+
+1. Clone the repo (or copy `scripts/` and `pipeline/` folders)
+2. Install prerequisites:
+   ```powershell
+   choco install ffmpeg
+   pip install -r pipeline/requirements.txt
+   ```
+3. Configure Gemini API key in `pipeline/.env`:
+   ```
+   GEMINI_API_KEY=your-key-here
+   ```
+4. Register the scheduled task:
+   ```powershell
+   .\Schedule-WorkflowPipeline.ps1 -Time "02:00" -GenerateReport
+   ```
+5. Verify with a manual run:
+   ```powershell
+   .\Schedule-WorkflowPipeline.ps1 -RunNow
+   ```
 
 ---
 
@@ -266,14 +368,23 @@ If you prefer to control the installer version:
 
 ### Regular Data Collection
 
-1. **Schedule Extraction**
-   - Run daily/weekly via Ninja RMM
+1. **Schedule Extraction** (Client Machines)
+   - Run daily via Ninja RMM
    - Script: `Extract-WorkflowCaptures.ps1`
-   - Consider `-DeleteAfterUpload` to manage disk space
+   - Uploads `.webm` to `\\bulley-fs1\workflow\{user}\`
 
-2. **Monitor Results**
+2. **Schedule Analysis Pipeline** (Utility Server)
+   - Run once on the utility server to register the task:
+     ```powershell
+     .\Schedule-WorkflowPipeline.ps1 -Time "02:00" -GenerateReport
+     ```
+   - Converts `.webm` → `.mp4`, runs Gemini analysis, outputs CSV
+   - Runs daily after extraction completes (set time accordingly)
+   - Monitor via `last_run.json` or Task Scheduler
+
+3. **Monitor Results**
    - Check returned objects for session counts
-   - Alert on failures
+   - Alert on failures via `last_run.json` health marker
 
 ### Application Updates
 

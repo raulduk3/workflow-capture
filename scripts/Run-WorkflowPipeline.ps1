@@ -37,7 +37,10 @@ param(
     [int]$Limit = 0,
 
     [Parameter(Mandatory=$false)]
-    [switch]$DryRun = $false
+    [switch]$DryRun = $false,
+
+    [Parameter(Mandatory=$false)]
+    [int]$LogRetentionDays = 14
 )
 
 $ErrorActionPreference = "Continue"
@@ -86,6 +89,46 @@ if ($Limit -gt 0)    { Write-Log "Limit:       $Limit videos" }
 Write-Log "=========================================="
 
 $overallSuccess = $true
+
+# =============================================================================
+# Pre-flight: Validate network share connectivity
+# =============================================================================
+
+$sourceShare = "\\bulley-fs1\workflow"
+$shareRetries = 3
+$shareAvailable = $false
+
+for ($i = 0; $i -lt $shareRetries; $i++) {
+    if (Test-Path $sourceShare) {
+        $shareAvailable = $true
+        Write-Log "Network share accessible: $sourceShare"
+        break
+    }
+    if ($i -lt ($shareRetries - 1)) {
+        Write-Log "Network share not reachable, retrying in 5s... (attempt $($i+1)/$shareRetries)" "WARN"
+        Start-Sleep -Seconds 5
+    }
+}
+
+if (-not $shareAvailable) {
+    Write-Log "ERROR: Network share unreachable after $shareRetries attempts: $sourceShare" "ERROR"
+    Write-Log "Pipeline cannot proceed without source data. Exiting." "ERROR"
+    exit 2
+}
+
+# =============================================================================
+# Pre-flight: Rotate old log files
+# =============================================================================
+
+if ($LogRetentionDays -gt 0) {
+    $logCutoff = (Get-Date).AddDays(-$LogRetentionDays)
+    $oldLogs = Get-ChildItem $LogDir -Filter "*.log" -File -ErrorAction SilentlyContinue |
+               Where-Object { $_.LastWriteTime -lt $logCutoff }
+    if ($oldLogs -and $oldLogs.Count -gt 0) {
+        Write-Log "Cleaning up $($oldLogs.Count) log file(s) older than $LogRetentionDays days"
+        $oldLogs | Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+}
 
 # =============================================================================
 # Stage 1: WebM → MP4 Conversion
@@ -198,6 +241,31 @@ Write-Log "=========================================="
 Write-Log "Elapsed:  $($elapsed.ToString('hh\:mm\:ss'))"
 Write-Log "Status:   $(if ($overallSuccess) { 'SUCCESS' } else { 'COMPLETED WITH ERRORS' })"
 Write-Log "=========================================="
+
+# =============================================================================
+# Write health marker for monitoring tools
+# =============================================================================
+
+$healthFile = Join-Path $LogDir "last_pipeline_run.json"
+$health = @{
+    timestamp      = (Get-Date -Format 'o')
+    elapsed        = $elapsed.ToString('hh\:mm\:ss')
+    success        = $overallSuccess
+    skip_conversion = [bool]$SkipConversion
+    metadata_only  = [bool]$MetadataOnly
+    user_filter    = $User
+    log_file       = (Join-Path $LogDir "pipeline_$(Get-Date -Format 'yyyy-MM-dd').log")
+} | ConvertTo-Json
+
+try {
+    if (-not (Test-Path $LogDir)) {
+        New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+    }
+    Set-Content -Path $healthFile -Value $health -Encoding UTF8
+    Write-Log "Health marker written: $healthFile"
+} catch {
+    Write-Log "WARNING: Could not write health marker: $_" "WARN"
+}
 
 if ($overallSuccess) {
     exit 0

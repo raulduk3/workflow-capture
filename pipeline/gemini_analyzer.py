@@ -72,6 +72,7 @@ Analyze all the provided screenshots and extract the following information. Look
 Return your analysis as a JSON object with exactly these fields:
 
 {{
+    "workflow_description": "A concise 1-2 sentence summary of what the user is actually doing in this recording, based on what you observe in the screenshots (e.g., 'User is processing vendor invoices in Excel, cross-referencing amounts against a Procore budget, then emailing approvals via Outlook.')",
     "primary_app": "The application that appears most frequently across the screenshots (e.g., 'Excel', 'Outlook', 'Procore', 'Chrome', 'SAP')",
     "app_sequence": ["Ordered list of distinct applications used, in the order they first appear"],
     "detected_actions": ["List of actions observed (e.g., 'data entry', 'copy-paste', 'form filling', 'email reading', 'file navigation', 'report generation', 'approval workflow', 'manual calculation')"],
@@ -248,8 +249,9 @@ def _parse_response(response_text: str, video_id: str) -> Optional[dict]:
             return None
 
     # Validate required fields
-    required = ["primary_app", "app_sequence", "detected_actions",
-                 "friction_events", "automation_score", "workflow_category"]
+    required = ["workflow_description", "primary_app", "app_sequence",
+                 "detected_actions", "friction_events", "automation_score",
+                 "workflow_category"]
 
     for field in required:
         if field not in data:
@@ -258,6 +260,7 @@ def _parse_response(response_text: str, video_id: str) -> Optional[dict]:
 
     # Normalize types
     result = {
+        "workflow_description": str(data.get("workflow_description", "")),
         "primary_app": str(data.get("primary_app", "Unknown")),
         "app_sequence": _ensure_json_list(data.get("app_sequence", [])),
         "detected_actions": _ensure_json_list(data.get("detected_actions", [])),
@@ -276,6 +279,7 @@ def _parse_response(response_text: str, video_id: str) -> Optional[dict]:
 def _default_value(field: str):
     """Return a sensible default for missing fields."""
     defaults = {
+        "workflow_description": "",
         "primary_app": "Unknown",
         "app_sequence": [],
         "detected_actions": [],
