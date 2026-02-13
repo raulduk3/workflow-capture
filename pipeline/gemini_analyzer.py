@@ -112,8 +112,9 @@ def _load_frames(frame_paths: list[str], max_frames: int = MAX_FRAMES_TO_ANALYZE
     for path in frame_paths:
         try:
             img = Image.open(path)
-            # Resize if very large to reduce API costs (keep aspect ratio)
-            max_dim = 1280
+            # Resize to reduce API token costs (keep aspect ratio)
+            # 768px ensures single tile = 258 tokens per image (not multiple tiles)
+            max_dim = 768
             if img.width > max_dim or img.height > max_dim:
                 img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
             images.append(img)

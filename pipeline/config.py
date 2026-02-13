@@ -44,11 +44,13 @@ FRAMES_TEMP_DIR = os.path.join(os.environ.get("TEMP", r"C:\temp"), "WorkflowFram
 # =============================================================================
 
 # Number of evenly-spaced frames to extract per video
-# 35 frames from a 5-min video = 1 frame every ~8.5 seconds
-FRAMES_PER_VIDEO = 75
+# 50 frames from a 5-min video = 1 frame every ~6 seconds
+# Optimized for maximum coverage while staying under token-per-minute limits
+# At 768px/258 tokens per frame = ~12,900 tokens per request + prompt
+FRAMES_PER_VIDEO = 50
 
 # Maximum frames to send to Gemini per request (cost control)
-MAX_FRAMES_TO_ANALYZE = 75
+MAX_FRAMES_TO_ANALYZE = 50
 
 # Delay between Gemini API calls in seconds (rate limit protection)
 # Increased to avoid hitting rate limits with large frame batches
