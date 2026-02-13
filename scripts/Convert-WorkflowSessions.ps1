@@ -522,16 +522,17 @@ foreach ($webm in $webmFiles) {
         continue
     }
 
-    # --- Get duration via ffprobe ---
-    $duration = Get-VideoDuration -FilePath $sourcePath -FfprobePath $ffprobeExe
-
     # --- Convert ---
     $success = Convert-WebmToMp4 -InputPath $sourcePath -OutputPath $mp4Path `
                                   -FfmpegExe $ffmpegExe -Crf $CrfQuality -PresetName $Preset
 
     if ($success) {
         $mp4SizeMB = [math]::Round((Get-Item $mp4Path).Length / 1MB, 2)
-        Write-Log "  Converted: $mp4Name ($mp4SizeMB MB)"
+
+        # Get duration from converted MP4 (WebM often lacks duration metadata)
+        $duration = Get-VideoDuration -FilePath $mp4Path -FfprobePath $ffprobeExe
+
+        Write-Log "  Converted: $mp4Name ($mp4SizeMB MB, ${duration}s)"
 
         # Append to CSV
         $csvData = @{
