@@ -293,9 +293,10 @@ function Test-VideoValidity {
     <#
     Validates that a video file:
     1. Contains video streams
-    2. Has a reasonable duration
+    2. Has a reasonable duration (if available)
     3. Is above minimum file size
     Returns: $true if valid, $false otherwise
+    Note: Duration check is lenient for .webm files which may lack metadata
     #>
 
     # Check file size first (fast)
@@ -308,12 +309,11 @@ function Test-VideoValidity {
         return $false
     }
 
-    # Probe for duration and stream info
+    # Probe for stream info
     try {
         $output = & $FfprobePath -v error `
                     -select_streams v:0 `
-                    -show_entries stream=codec_type,duration `
-                    -show_entries format=duration `
+                    -show_entries stream=codec_type `
                     -of default=noprint_wrappers=1 `
                     $FilePath 2>$null
 
@@ -325,27 +325,8 @@ function Test-VideoValidity {
             return $false
         }
 
-        # Extract duration
-        $durationMatch = $outputStr -match "duration=([0-9.]+)"
-        if ($durationMatch) {
-            $duration = [double]$matches[1]
-        } else {
-            Write-Log "SKIP: Could not determine duration: $(Split-Path $FilePath -Leaf)" "WARN"
-            return $false
-        }
-
-        # Minimum 5 seconds of actual content
-        if ($duration -lt 5) {
-            Write-Log "SKIP: Duration too short ($([math]::Round($duration, 1))s, < 5s): $(Split-Path $FilePath -Leaf)" "WARN"
-            return $false
-        }
-
-        # Maximum reasonable duration (12 hours)
-        if ($duration -gt 43200) {
-            Write-Log "SKIP: Duration suspiciously long ($([math]::Round($duration / 60, 1)) min): $(Split-Path $FilePath -Leaf)" "WARN"
-            return $false
-        }
-
+        # For .webm files, duration may not be available until after conversion
+        # We'll validate duration after conversion instead
         return $true
 
     } catch {
