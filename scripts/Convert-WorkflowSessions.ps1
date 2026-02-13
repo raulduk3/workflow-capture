@@ -228,6 +228,124 @@ function Get-VideoDuration {
 }
 
 # =============================================================================
+# Video Validation
+# =============================================================================
+
+function Test-VideoValidity {
+    param(
+        [string]$FilePath,
+        [string]$FfprobePath
+    )
+
+    <#
+    Validates that a video file:
+    1. Contains video streams
+    2. Has a reasonable duration
+    3. Is above minimum file size
+    Returns: $true if valid, $false otherwise
+    #>
+
+    # Check file size first (fast)
+    $fileSizeBytes = (Get-Item $FilePath).Length
+    $fileSizeMB = [math]::Round($fileSizeBytes / 1MB, 2)
+
+    # Minimum 50 KB — anything smaller is likely corrupted/empty
+    if ($fileSizeBytes -lt 50KB) {
+        Write-Log "SKIP: File too small ($fileSizeMB MB, < 50 KB): $(Split-Path $FilePath -Leaf)" "WARN"
+        return $false
+    }
+
+    # Probe for duration and stream info
+    try {
+        $output = & $FfprobePath -v error `
+                    -select_streams v:0 `
+                    -show_entries stream=codec_type,duration `
+                    -show_entries format=duration `
+                    -of default=noprint_wrappers=1 `
+                    $FilePath 2>$null
+
+        $outputStr = $output | Out-String
+
+        # Check for video stream
+        if ($outputStr -notmatch "codec_type=video") {
+            Write-Log "SKIP: No video stream found: $(Split-Path $FilePath -Leaf)" "WARN"
+            return $false
+        }
+
+        # Extract duration
+        $durationMatch = $outputStr -match "duration=([0-9.]+)"
+        if ($durationMatch) {
+            $duration = [double]$matches[1]
+        } else {
+            Write-Log "SKIP: Could not determine duration: $(Split-Path $FilePath -Leaf)" "WARN"
+            return $false
+        }
+
+        # Minimum 5 seconds of actual content
+        if ($duration -lt 5) {
+            Write-Log "SKIP: Duration too short ($([math]::Round($duration, 1))s, < 5s): $(Split-Path $FilePath -Leaf)" "WARN"
+            return $false
+        }
+
+        # Maximum reasonable duration (12 hours)
+        if ($duration -gt 43200) {
+            Write-Log "SKIP: Duration suspiciously long ($([math]::Round($duration / 60, 1)) min): $(Split-Path $FilePath -Leaf)" "WARN"
+            return $false
+        }
+
+        return $true
+
+    } catch {
+        Write-Log "SKIP: ffprobe validation failed: $(Split-Path $FilePath -Leaf) - $_" "WARN"
+        return $false
+    }
+}
+
+function Test-VideoHasFrames {
+    param(
+        [string]$FilePath,
+        [string]$FfmpegExe
+    )
+
+    <#
+    Quick check: attempt to extract the first frame.
+    If this fails, the video is likely corrupted and has no decodable content.
+    #>
+
+    $tempFrame = "$env:TEMP\temp_frame_$(Get-Random).jpg"
+
+    try {
+        $process = Start-Process -FilePath $FfmpegExe `
+                    -ArgumentList @(
+                        "-i", $FilePath,
+                        "-vf", "select=eq(n\,0)",
+                        "-q:v", "2",
+                        "-frames:v", "1",
+                        "-y",
+                        "-loglevel", "error",
+                        $tempFrame
+                    ) `
+                    -Wait -PassThru -NoNewWindow -WindowStyle Hidden
+
+        if ($process.ExitCode -eq 0 -and (Test-Path $tempFrame)) {
+            $frameSize = (Get-Item $tempFrame).Length
+            Remove-Item $tempFrame -Force -ErrorAction SilentlyContinue
+
+            if ($frameSize -gt 1000) {  # Frame should be at least 1KB
+                return $true
+            }
+        }
+
+        Remove-Item $tempFrame -Force -ErrorAction SilentlyContinue
+        return $false
+
+    } catch {
+        Remove-Item $tempFrame -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+}
+
+# =============================================================================
 # Video Conversion
 # =============================================================================
 
@@ -379,6 +497,7 @@ Write-Log "CSV:      $CsvPath"
 Write-Log "Quality:  CRF $CrfQuality / Preset $Preset"
 if ($DryRun) { Write-Log "MODE:     DRY RUN - no files will be converted" "WARN" }
 if ($SingleUser) { Write-Log "Filter:   User = $SingleUser" }
+Write-Log "Filtering: Videos < 50KB and duration < 5s will be skipped"
 Write-Log "=========================================="
 
 # --- Pre-flight checks ---
@@ -472,11 +591,12 @@ Write-Log "Previously processed: $($existingEntries.Count) file(s)"
 # --- Process each file ---
 
 $stats = @{
-    Total     = $webmFiles.Count
-    Converted = 0
-    Skipped   = 0
-    Failed    = 0
-    ParseErr  = 0
+    Total       = $webmFiles.Count
+    Converted   = 0
+    Skipped     = 0
+    Failed      = 0
+    ParseErr    = 0
+    InvalidVid  = 0
 }
 
 foreach ($webm in $webmFiles) {
@@ -515,6 +635,19 @@ foreach ($webm in $webmFiles) {
     # --- Log what we're doing ---
     $fileSizeMB = [math]::Round($webm.Length / 1MB, 2)
     Write-Log "Processing: $($webm.Name) ($fileSizeMB MB) [user: $username]"
+
+    # --- Validate video before attempting conversion ---
+    if (-not (Test-VideoValidity -FilePath $sourcePath -FfprobePath $ffprobeExe)) {
+        $stats.InvalidVid++
+        continue
+    }
+
+    # --- Quick frame check to ensure video isn't corrupted ---
+    if (-not (Test-VideoHasFrames -FilePath $sourcePath -FfmpegExe $ffmpegExe)) {
+        Write-Log "SKIP: No decodable frames found: $(Split-Path $sourcePath -Leaf)" "WARN"
+        $stats.InvalidVid++
+        continue
+    }
 
     if ($DryRun) {
         Write-Log "  DRY RUN: Would convert to $mp4Name"
@@ -563,13 +696,18 @@ foreach ($webm in $webmFiles) {
 Write-Log "=========================================="
 Write-Log "Conversion Complete"
 Write-Log "=========================================="
-Write-Log "Total .webm files:   $($stats.Total)"
-Write-Log "Converted:           $($stats.Converted)"
-Write-Log "Skipped (existing):  $($stats.Skipped)"
-Write-Log "Failed:              $($stats.Failed)"
-Write-Log "Parse errors:        $($stats.ParseErr)"
-Write-Log "CSV:                 $CsvPath"
+Write-Log "Total .webm files:    $($stats.Total)"
+Write-Log "Converted:            $($stats.Converted)"
+Write-Log "Skipped (existing):   $($stats.Skipped)"
+Write-Log "Invalid/Corrupted:    $($stats.InvalidVid)"
+Write-Log "Failed:               $($stats.Failed)"
+Write-Log "Parse errors:         $($stats.ParseErr)"
+Write-Log "CSV:                  $CsvPath"
 Write-Log "=========================================="
+
+if ($stats.Failed -gt 0 -or $stats.InvalidVid -gt 0) {
+    Write-Log "Note: Invalid/corrupted videos were skipped and not added to CSV" "INFO"
+}
 
 if ($stats.Failed -gt 0) {
     exit 4
