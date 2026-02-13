@@ -242,6 +242,48 @@ function Get-VideoDuration {
 # Video Validation
 # =============================================================================
 
+function Move-ToMisrecordings {
+    param(
+        [string]$SourcePath,
+        [string]$Username,
+        [string]$Reason
+    )
+
+    <#
+    Moves a misrecorded/corrupted .webm file to a _misrecordings subfolder
+    within the user's directory to prevent repeated processing.
+    #>
+
+    try {
+        $sourceDir = Split-Path $SourcePath -Parent
+        $misrecordingsDir = Join-Path $sourceDir "_misrecordings"
+        
+        # Create _misrecordings folder if it doesn't exist
+        if (-not (Test-Path $misrecordingsDir)) {
+            New-Item -ItemType Directory -Path $misrecordingsDir -Force | Out-Null
+        }
+
+        $fileName = Split-Path $SourcePath -Leaf
+        $destPath = Join-Path $misrecordingsDir $fileName
+
+        # If file already exists in destination, append timestamp
+        if (Test-Path $destPath) {
+            $baseName = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+            $extension = [System.IO.Path]::GetExtension($fileName)
+            $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+            $fileName = "${baseName}_${timestamp}${extension}"
+            $destPath = Join-Path $misrecordingsDir $fileName
+        }
+
+        Move-Item -Path $SourcePath -Destination $destPath -Force
+        Write-Log "  MOVED to _misrecordings: $fileName ($Reason)" "INFO"
+        return $true
+    } catch {
+        Write-Log "  WARNING: Could not move to _misrecordings: $_" "WARN"
+        return $false
+    }
+}
+
 function Test-VideoValidity {
     param(
         [string]$FilePath,
