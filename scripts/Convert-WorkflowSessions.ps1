@@ -212,21 +212,13 @@ function Get-VideoDuration {
         [string]$FfprobePath
     )
 
+    # Probe duration from the converted MP4 — always has proper container metadata
     try {
-        # 2>$null discards stderr cleanly; 2>&1 would mix ErrorRecord objects into JSON
-        $jsonOutput = & $FfprobePath -v quiet -print_format json -show_format $FilePath 2>$null
-
-        if (-not $jsonOutput) {
-            Write-Log "WARNING: ffprobe returned no output for $(Split-Path $FilePath -Leaf)" "WARN"
-            return -1
-        }
-
-        # Join output lines into a single string for ConvertFrom-Json
-        $jsonString = ($jsonOutput | Out-String).Trim()
-        $formatInfo = $jsonString | ConvertFrom-Json
-
-        if ($formatInfo.format -and $formatInfo.format.duration) {
-            return [math]::Round([double]$formatInfo.format.duration, 1)
+        $output = & $FfprobePath -v error -show_entries format=duration `
+                    -of default=noprint_wrappers=1:nokey=1 $FilePath 2>$null
+        $durationStr = ($output | Out-String).Trim()
+        if ($durationStr -and $durationStr -ne "N/A" -and $durationStr -match '^\d') {
+            return [math]::Round([double]$durationStr, 1)
         }
     } catch {
         Write-Log "WARNING: ffprobe failed for $(Split-Path $FilePath -Leaf): $_" "WARN"
