@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 # Load .env file from the pipeline directory
 _pipeline_dir = Path(__file__).parent
-load_dotenv(_pipeline_dir / ".env")
+load_dotenv(_pipeline_dir / ".env", override=True)
 
 # =============================================================================
 # Paths
@@ -106,7 +106,7 @@ def find_ffprobe() -> str:
 # Gemini API
 # =============================================================================
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = "gemini-2.0-flash"
 
 # =============================================================================

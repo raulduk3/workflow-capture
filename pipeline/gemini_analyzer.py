@@ -7,6 +7,7 @@ friction_events, automation_score, workflow_category.
 """
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -36,14 +37,15 @@ def _ensure_configured():
     if _client is not None:
         return
 
-    if not GEMINI_API_KEY:
+    api_key = os.environ.get("GEMINI_API_KEY", GEMINI_API_KEY).strip()
+    if not api_key:
         raise ValueError(
             "GEMINI_API_KEY not set. Create pipeline/.env with:\n"
             "  GEMINI_API_KEY=your-key-here\n"
             "Get a key at: https://aistudio.google.com/app/apikey"
         )
 
-    _client = genai.Client(api_key=GEMINI_API_KEY)
+    _client = genai.Client(api_key=api_key)
 
 
 def _get_client():
