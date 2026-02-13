@@ -4,11 +4,12 @@ L7S Workflow Analysis Pipeline - Insights Report Generator
 Reads the analysis CSV and produces the Day 7 deliverable report as markdown.
 Report sections per VIDEO_TO_INSIGHTS_PIPELINE.md section 8.1:
   1. Volume Summary
-  2. Top Friction Points
-  3. Automation Opportunities
-  4. Application Insights
-  5. User-Specific Findings
-  6. Gemini Integration Recommendations
+  2. Complete Workflow Inventory
+  3. Top Friction Points
+  4. Automation Opportunities
+  5. Application Insights
+  6. User-Specific Findings
+  7. Gemini Integration Recommendations
 """
 
 import csv
@@ -56,6 +57,7 @@ def generate_report(
     sections = []
     sections.append(_header(df))
     sections.append(_volume_summary(df))
+    sections.append(_workflow_inventory(df))
     sections.append(_top_friction_points(df))
     sections.append(_automation_opportunities(df))
     sections.append(_application_insights(df))
@@ -140,8 +142,30 @@ def _volume_summary(df: pd.DataFrame) -> str:
 {user_lines}"""
 
 
+def _workflow_inventory(df: pd.DataFrame) -> str:
+    """Complete table of all analyzed workflows."""
+    lines = ["## 2. Complete Workflow Inventory"]
+    lines.append(f"\n**Total workflows analyzed:** {len(df)}")
+    lines.append("\n| User | Task | Duration | App | Score | Friction | Category | Description |")
+    lines.append("|------|------|----------|-----|-------|----------|----------|-------------|")
+    
+    for _, row in df.iterrows():
+        user = row.get("username", "")
+        task = _truncate(row.get("task_description", ""), 30)
+        duration = f"{_safe_float(row.get('duration_sec', 0))/60:.1f}m" if _safe_float(row.get('duration_sec', 0)) > 0 else "-"
+        app = _truncate(row.get("primary_app", ""), 15)
+        score = f"{_safe_float(row.get('automation_score', 0)):.2f}"
+        friction = str(_safe_int(row.get("friction_count", 0)))
+        category = row.get("workflow_category", "")
+        description = _truncate(row.get("workflow_description", ""), 50)
+        
+        lines.append(f"| {user} | {task} | {duration} | {app} | {score} | {friction} | {category} | {description} |")
+    
+    return "\n".join(lines)
+
+
 def _top_friction_points(df: pd.DataFrame) -> str:
-    lines = ["## 2. Top Friction Points (Priority)"]
+    lines = ["## 3. Top Friction Points (Priority)"]
 
     # Videos with highest friction counts
     if "friction_count" not in df.columns:
@@ -272,7 +296,7 @@ def _automation_opportunities(df: pd.DataFrame) -> str:
 
 
 def _application_insights(df: pd.DataFrame) -> str:
-    lines = ["## 4. Application Insights"]
+    lines = ["## 5. Application Insights"]
 
     if "primary_app" not in df.columns or df["primary_app"].dropna().empty:
         lines.append("\n*No application data available.*")
@@ -322,7 +346,7 @@ def _application_insights(df: pd.DataFrame) -> str:
 
 
 def _user_findings(df: pd.DataFrame) -> str:
-    lines = ["## 5. User-Specific Findings"]
+    lines = ["## 6. User-Specific Findings"]
 
     if "username" not in df.columns:
         lines.append("\n*No user data available.*")
@@ -397,7 +421,7 @@ def _user_findings(df: pd.DataFrame) -> str:
 
 
 def _gemini_recommendations(df: pd.DataFrame) -> str:
-    lines = ["## 6. Gemini Integration Recommendations"]
+    lines = ["## 7. Gemini Integration Recommendations"]
 
     has_analysis = "automation_score" in df.columns and df["automation_score"].apply(_safe_float).sum() > 0
 
