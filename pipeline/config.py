@@ -24,8 +24,8 @@ MP4_DIR = r"C:\temp\WorkflowProcessing"
 # Conversion CSV produced by Convert-WorkflowSessions.ps1
 CONVERSION_CSV = os.path.join(MP4_DIR, "workflow_sessions.csv")
 
-# Output directory on network share for analysis results
-OUTPUT_DIR = r"\\bulley-fs1\workflow\_outputs"
+# Output directory for analysis results
+OUTPUT_DIR = MP4_DIR
 
 # Main analysis CSV (one row per video, cumulative)
 ANALYSIS_CSV = os.path.join(OUTPUT_DIR, "workflow_analysis.csv")
