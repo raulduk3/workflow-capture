@@ -633,6 +633,7 @@ $stats = @{
     Failed      = 0
     ParseErr    = 0
     InvalidVid  = 0
+    Moved       = 0
 }
 
 foreach ($webm in $webmFiles) {
@@ -736,10 +737,15 @@ Write-Log "Total .webm files:    $($stats.Total)"
 Write-Log "Converted:            $($stats.Converted)"
 Write-Log "Skipped (existing):   $($stats.Skipped)"
 Write-Log "Invalid/Corrupted:    $($stats.InvalidVid)"
+Write-Log "Moved to _misrecordings: $($stats.Moved)"
 Write-Log "Failed:               $($stats.Failed)"
 Write-Log "Parse errors:         $($stats.ParseErr)"
 Write-Log "CSV:                  $CsvPath"
 Write-Log "=========================================="
+
+if ($stats.Moved -gt 0) {
+    Write-Log "Note: Invalid/corrupted source videos moved to _misrecordings subfolder" "INFO"
+}
 
 if ($stats.Failed -gt 0 -or $stats.InvalidVid -gt 0) {
     Write-Log "Note: Invalid/corrupted videos were skipped and not added to CSV" "INFO"
