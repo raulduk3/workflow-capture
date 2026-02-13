@@ -51,10 +51,14 @@ FRAMES_PER_VIDEO = 75
 MAX_FRAMES_TO_ANALYZE = 75
 
 # Delay between Gemini API calls in seconds (rate limit protection)
-API_CALL_DELAY_SECONDS = 2.0
+# Increased to avoid hitting rate limits with large frame batches
+API_CALL_DELAY_SECONDS = 5.0
 
 # Maximum retries for Gemini API calls
-MAX_API_RETRIES = 3
+MAX_API_RETRIES = 5
+
+# Initial backoff delay for rate limit errors (seconds)
+RATE_LIMIT_INITIAL_BACKOFF = 10.0
 
 # Minimum file size in bytes to consider a video valid (skip corrupt/empty)
 MIN_FILE_SIZE_BYTES = 10_000  # 10 KB

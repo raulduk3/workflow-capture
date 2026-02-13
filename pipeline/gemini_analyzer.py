@@ -22,6 +22,7 @@ from config import (
     GEMINI_MODEL,
     MAX_API_RETRIES,
     MAX_FRAMES_TO_ANALYZE,
+    RATE_LIMIT_INITIAL_BACKOFF,
 )
 
 # =============================================================================
@@ -167,6 +168,10 @@ def analyze_video(
     # Get client
     client = _get_client()
 
+    # Add a small warmup delay before the first request to avoid burst limits
+    print(f"  Waiting {API_CALL_DELAY_SECONDS:.0f}s before API call (rate limit protection)...")
+    time.sleep(API_CALL_DELAY_SECONDS / 2)
+
     # Call Gemini with retries
     last_error = None
     for attempt in range(1, MAX_API_RETRIES + 1):
@@ -191,9 +196,10 @@ def analyze_video(
             last_error = e
             error_str = str(e).lower()
 
-            # Rate limit — back off exponentially
-            if "429" in str(e) or "resource_exhausted" in error_str:
-                wait = API_CALL_DELAY_SECONDS * (2 ** attempt)
+            # Rate limit — back off exponentially with longer initial wait
+            if "429" in str(e) or "resource_exhausted" in error_str or "quota" in error_str:
+                # Start with longer backoff and increase exponentially
+                wait = RATE_LIMIT_INITIAL_BACKOFF * (2 ** (attempt - 1))
                 print(f"[WARN] Rate limited on {video_id}, waiting {wait:.0f}s (attempt {attempt}/{MAX_API_RETRIES})")
                 time.sleep(wait)
                 continue
@@ -208,7 +214,17 @@ def analyze_video(
             if attempt < MAX_API_RETRIES:
                 time.sleep(API_CALL_DELAY_SECONDS)
 
+    error_msg = str(last_error)
     print(f"[ERROR] All {MAX_API_RETRIES} attempts failed for {video_id}: {last_error}")
+    
+    # If it's a quota/rate limit error, provide guidance
+    if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "quota" in error_msg.lower():
+        print(f"[TIP] Consider:")
+        print(f"      - Increase API_CALL_DELAY_SECONDS in config.py (currently {API_CALL_DELAY_SECONDS}s)")
+        print(f"      - Reduce FRAMES_PER_VIDEO in config.py to lower API load")
+        print(f"      - Process fewer videos at once with --limit flag")
+        print(f"      - Check your Gemini API quota at: https://aistudio.google.com/")
+    
     return None
 
 

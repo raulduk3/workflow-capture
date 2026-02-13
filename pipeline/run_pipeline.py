@@ -203,6 +203,7 @@ def run_pipeline(args: argparse.Namespace) -> dict:
 
             # Rate limit delay between Gemini calls
             if not args.metadata_only and i < len(to_process):
+                print(f"  Waiting {API_CALL_DELAY_SECONDS:.0f}s before next video...")
                 time.sleep(API_CALL_DELAY_SECONDS)
 
         except Exception as e:
