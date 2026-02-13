@@ -708,27 +708,50 @@ foreach ($webm in $webmFiles) {
         # Get duration from converted MP4 (WebM often lacks duration metadata)
         $duration = Get-VideoDuration -FilePath $mp4Path -FfprobePath $ffprobeExe
 
-        Write-Log "  Converted: $mp4Name ($mp4SizeMB MB, ${duration}s)"
+        # Validate converted video
+        $isValid = $true
+        $skipReason = ""
 
-        # Append to CSV
-        $csvData = @{
-            SourcePath      = $sourcePath
-            Mp4Path         = $mp4Path
-            Username        = $username
-            Date            = $parsed.Date
-            Time            = $parsed.Time
-            Timestamp       = $parsed.Timestamp
-            MachineName     = $parsed.MachineName
-            TaskDescription = $parsed.TaskDescription
-            DayOfWeek       = $parsed.DayOfWeek
-            HourOfDay       = $parsed.HourOfDay
-            DurationSeconds = $duration
-            FileSizeMB      = $fileSizeMB
-            ConvertedAt     = (Get-Date -Format "yyyy-MM-ddTHH:mm:ss")
+        if ($duration -lt 0) {
+            $isValid = $false
+            $skipReason = "Could not determine duration"
+        } elseif ($duration -lt 5) {
+            $isValid = $false
+            $skipReason = "Duration too short ($([math]::Round($duration, 1))s, < 5s)"
+        } elseif ($mp4SizeMB -lt 0.05) {
+            $isValid = $false
+            $skipReason = "File too small ($mp4SizeMB MB)"
         }
-        Append-CsvRow -Path $CsvPath -Data $csvData
 
-        $stats.Converted++
+        if ($isValid) {
+            Write-Log "  Converted: $mp4Name ($mp4SizeMB MB, ${duration}s)"
+
+            # Append to CSV
+            $csvData = @{
+                SourcePath      = $sourcePath
+                Mp4Path         = $mp4Path
+                Username        = $username
+                Date            = $parsed.Date
+                Time            = $parsed.Time
+                Timestamp       = $parsed.Timestamp
+                MachineName     = $parsed.MachineName
+                TaskDescription = $parsed.TaskDescription
+                DayOfWeek       = $parsed.DayOfWeek
+                HourOfDay       = $parsed.HourOfDay
+                DurationSeconds = $duration
+                FileSizeMB      = $fileSizeMB
+                ConvertedAt     = (Get-Date -Format "yyyy-MM-ddTHH:mm:ss")
+            }
+            Append-CsvRow -Path $CsvPath -Data $csvData
+            $stats.Converted++
+        } else {
+            Write-Log "  SKIP: $skipReason" "WARN"
+            Remove-Item $mp4Path -Force -ErrorAction SilentlyContinue
+            if (Move-ToMisrecordings -SourcePath $sourcePath -Username $username -Reason $skipReason) {
+                $stats.Moved++
+            }
+            $stats.InvalidVid++
+        }
     } else {
         $stats.Failed++
     }
