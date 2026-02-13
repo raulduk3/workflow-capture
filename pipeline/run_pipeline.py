@@ -2,7 +2,7 @@
 L7S Workflow Analysis Pipeline - Orchestrator
 
 Main entry point that wires all pipeline stages together:
-  1. Discover .webm files on network share
+    1. Load converted MP4 sessions from workflow_sessions.csv
   2. Skip already-processed videos
   3. For each new video:
      a. Parse filename → metadata
@@ -32,9 +32,9 @@ from pathlib import Path
 
 from config import (
     API_CALL_DELAY_SECONDS,
+    CONVERSION_CSV,
     MP4_DIR,
     OUTPUT_DIR,
-    SOURCE_SHARE,
 )
 from csv_manager import (
     append_row,
@@ -44,7 +44,7 @@ from csv_manager import (
     load_processed_ids,
     mark_processed,
 )
-from filename_parser import discover_videos
+from filename_parser import load_converted_sessions
 from frame_extractor import (
     cleanup_frames,
     extract_frames,
@@ -75,6 +75,7 @@ def run_pipeline(args: argparse.Namespace) -> dict:
     print("L7S Workflow Analysis Pipeline")
     print("=" * 60)
     print(f"Source:      {args.source}")
+    print(f"Sessions:    {args.sessions_csv}")
     print(f"Output:      {OUTPUT_DIR}")
     if args.user:
         print(f"Filter:      user = {args.user}")
@@ -91,8 +92,8 @@ def run_pipeline(args: argparse.Namespace) -> dict:
         ensure_output_dir()
 
     # --- Stage 1: Discover videos ---
-    print("\n[Stage 1] Discovering videos...")
-    videos = discover_videos(args.source, single_user=args.user)
+    print("\n[Stage 1] Loading converted sessions...")
+    videos = load_converted_sessions(args.sessions_csv, single_user=args.user)
     stats["total"] = len(videos)
 
     if not videos:
@@ -122,9 +123,17 @@ def run_pipeline(args: argparse.Namespace) -> dict:
     # --- Stage 2-4: Process each video ---
     for i, video_meta in enumerate(to_process, 1):
         video_id = video_meta["video_id"]
-        source_path = video_meta["source_path"]
-        filename = Path(source_path).name
+        source_path = video_meta.get("source_path", "")
+        mp4_path = video_meta.get("mp4_path", "")
+        video_path = mp4_path if mp4_path else source_path
+        filename = Path(video_path).name
         username = video_meta["username"]
+
+        if not video_path:
+            stats["failed"] += 1
+            stats["errors"].append("Missing video path in sessions CSV")
+            print("  ERROR: Missing video path in sessions CSV")
+            continue
 
         print(f"\n[{i}/{len(to_process)}] {filename}")
         print(f"  User: {username} | Task: {video_meta['task_description']}")
@@ -137,21 +146,14 @@ def run_pipeline(args: argparse.Namespace) -> dict:
         try:
             # --- Stage 2: Get video metadata ---
             print(f"  Getting video metadata...")
-            file_metadata = get_video_metadata(source_path)
+            file_metadata = get_video_metadata(video_path)
             print(f"  Duration: {file_metadata['duration_sec']}s | Size: {file_metadata['file_size_mb']} MB")
-
-            # --- Determine MP4 path (if converted) ---
-            basename = Path(source_path).stem
-            mp4_name = f"{username}_{basename}.mp4"
-            mp4_path = str(Path(MP4_DIR) / mp4_name)
-            if not Path(mp4_path).is_file():
-                mp4_path = ""  # Not yet converted
 
             gemini_result = None
             if not args.metadata_only:
                 # --- Stage 3: Extract frames ---
                 print(f"  Extracting frames...")
-                frames = extract_frames(source_path)
+                frames = extract_frames(video_path)
 
                 if not frames:
                     print(f"  WARNING: No frames extracted, skipping Gemini analysis")
@@ -254,8 +256,13 @@ Examples:
 
     parser.add_argument(
         "--source",
-        default=SOURCE_SHARE,
-        help=f"Source share path (default: {SOURCE_SHARE})",
+        default=MP4_DIR,
+        help=f"Source directory for converted MP4s (default: {MP4_DIR})",
+    )
+    parser.add_argument(
+        "--sessions-csv",
+        default=CONVERSION_CSV,
+        help=f"Path to workflow_sessions.csv (default: {CONVERSION_CSV})",
     )
     parser.add_argument(
         "--user",

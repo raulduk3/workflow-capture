@@ -21,6 +21,9 @@ SOURCE_SHARE = r"\\bulley-fs1\workflow"
 # Local directory on utility server where MP4s are written by Convert-WorkflowSessions.ps1
 MP4_DIR = r"C:\temp\WorkflowProcessing"
 
+# Conversion CSV produced by Convert-WorkflowSessions.ps1
+CONVERSION_CSV = os.path.join(MP4_DIR, "workflow_sessions.csv")
+
 # Output directory on network share for analysis results
 OUTPUT_DIR = r"\\bulley-fs1\workflow\_outputs"
 
