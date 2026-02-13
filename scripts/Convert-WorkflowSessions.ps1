@@ -359,7 +359,7 @@ function Test-VideoHasFrames {
                         "-loglevel", "error",
                         $tempFrame
                     ) `
-                    -Wait -PassThru -NoNewWindow -WindowStyle Hidden
+                    -Wait -PassThru -NoNewWindow
 
         if ($process.ExitCode -eq 0 -and (Test-Path $tempFrame)) {
             $frameSize = (Get-Item $tempFrame).Length
