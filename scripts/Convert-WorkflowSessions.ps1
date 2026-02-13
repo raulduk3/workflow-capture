@@ -592,7 +592,8 @@ $userFolders = Get-ChildItem $searchPath -Directory -ErrorAction SilentlyContinu
                Where-Object { $_.Name -notlike "_*" }
 
 if ($SingleUser) {
-    # When filtering to a single user, search directly
+    # When filtering to a single user, search directly in user folder (not subfolders)
+    # _misrecordings is a subfolder, so files there won't be picked up
     $webmFiles = Get-ChildItem $searchPath -Filter "*.webm" -File -ErrorAction SilentlyContinue
     # Attach username info
     $webmFiles = $webmFiles | ForEach-Object {
@@ -600,6 +601,7 @@ if ($SingleUser) {
     }
 } else {
     foreach ($folder in $userFolders) {
+        # Get files only from user folder root, not subfolders
         $files = Get-ChildItem $folder.FullName -Filter "*.webm" -File -ErrorAction SilentlyContinue
         foreach ($f in $files) {
             $f | Add-Member -NotePropertyName "ParentUsername" -NotePropertyValue $folder.Name -PassThru
