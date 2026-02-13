@@ -113,8 +113,8 @@ GEMINI_MODEL = "gemini-2.0-flash"
 # CSV Schema
 # =============================================================================
 
-# Full schema as defined in the whitepaper (19 fields)
-# ActivTrak fields are included in the schema but left empty until integration
+# Full schema (16 fields)
+# Core analysis pipeline: filename metadata + Gemini Vision + pattern detection
 CSV_COLUMNS = [
     # From filename (7 fields)
     "video_id",
@@ -137,10 +137,6 @@ CSV_COLUMNS = [
     "workflow_category",
     # Pattern flags (1 derived field)
     "pattern_flags",
-    # From ActivTrak - deferred (3 fields, empty for now)
-    "activtrak_productive_pct",
-    "activtrak_idle_min",
-    "activtrak_top_apps",
     # Metadata
     "source_path",
     "mp4_path",
