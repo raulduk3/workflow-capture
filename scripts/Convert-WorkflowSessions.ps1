@@ -212,12 +212,23 @@ function Get-VideoDuration {
         [string]$FfprobePath
     )
 
-    # Probe duration from the converted MP4 — always has proper container metadata
+    # Probe duration from the video file
+    # Try format duration first, then stream duration
     try {
+        # Try format duration
         $output = & $FfprobePath -v error -show_entries format=duration `
                     -of default=noprint_wrappers=1:nokey=1 $FilePath 2>$null
         $durationStr = ($output | Out-String).Trim()
-        if ($durationStr -and $durationStr -ne "N/A" -and $durationStr -match '^\d') {
+        if ($durationStr -and $durationStr -ne "N/A" -and $durationStr -match '^[0-9.]') {
+            return [math]::Round([double]$durationStr, 1)
+        }
+
+        # Fallback: try stream duration
+        $output = & $FfprobePath -v error -select_streams v:0 `
+                    -show_entries stream=duration `
+                    -of default=noprint_wrappers=1:nokey=1 $FilePath 2>$null
+        $durationStr = ($output | Out-String).Trim()
+        if ($durationStr -and $durationStr -ne "N/A" -and $durationStr -match '^[0-9.]') {
             return [math]::Round([double]$durationStr, 1)
         }
     } catch {
