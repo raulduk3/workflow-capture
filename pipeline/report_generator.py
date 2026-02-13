@@ -211,7 +211,7 @@ def _top_friction_points(df: pd.DataFrame) -> str:
         lines.append("|------|----------------------|---------------|")
         for user, total in user_friction.items():
             count = len(df[df["username"] == user])
-            avg =4total / count if count > 0 else 0
+            avg = total / count if count > 0 else 0
             lines.append(f"| {user} | {total} | {avg:.1f} |")
 
     # Common friction event descriptions
