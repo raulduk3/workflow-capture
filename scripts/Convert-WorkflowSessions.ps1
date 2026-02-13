@@ -240,8 +240,11 @@ function Convert-WebmToMp4 {
         [string]$PresetName
     )
 
+    # pad to even dimensions — libx264 requires width and height divisible by 2
+    # Multi-monitor captures can produce odd dimensions (e.g., 5760x1089)
     $ffmpegArgs = @(
         "-i", $InputPath,
+        "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
         "-c:v", "libx264",
         "-crf", $Crf.ToString(),
         "-preset", $PresetName,
