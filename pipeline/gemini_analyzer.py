@@ -11,7 +11,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
-import google.generativeai as genai
+import google.genai as genai
+from google.genai import types
 from PIL import Image
 
 from config import (
@@ -26,13 +27,13 @@ from config import (
 # Gemini API Setup
 # =============================================================================
 
-_client_configured = False
+_client = None
 
 
 def _ensure_configured():
-    """Configure the Gemini client once."""
-    global _client_configured
-    if _client_configured:
+    """Initialize the Gemini client once."""
+    global _client
+    if _client is not None:
         return
 
     if not GEMINI_API_KEY:
@@ -42,8 +43,13 @@ def _ensure_configured():
             "Get a key at: https://aistudio.google.com/app/apikey"
         )
 
-    genai.configure(api_key=GEMINI_API_KEY)
-    _client_configured = True
+    _client = genai.Client(api_key=GEMINI_API_KEY)
+
+
+def _get_client():
+    """Get the configured client."""
+    _ensure_configured()
+    return _client
 
 
 # =============================================================================
@@ -156,20 +162,21 @@ def analyze_video(
     # Build content: prompt + all images
     content = [prompt] + images
 
-    # Create model
-    model = genai.GenerativeModel(
-        model_name=GEMINI_MODEL,
-        generation_config=genai.GenerationConfig(
-            response_mime_type="application/json",
-            temperature=0.2,  # Low temp for consistent structured output
-        ),
-    )
+    # Get client
+    client = _get_client()
 
     # Call Gemini with retries
     last_error = None
     for attempt in range(1, MAX_API_RETRIES + 1):
         try:
-            response = model.generate_content(content)
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=content,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.2,  # Low temp for consistent structured output
+                ),
+            )
 
             # Parse JSON response
             result = _parse_response(response.text, video_id)
