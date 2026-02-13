@@ -675,6 +675,9 @@ foreach ($webm in $webmFiles) {
 
     # --- Validate video before attempting conversion ---
     if (-not (Test-VideoValidity -FilePath $sourcePath -FfprobePath $ffprobeExe)) {
+        if (Move-ToMisrecordings -SourcePath $sourcePath -Username $username -Reason "Failed validation") {
+            $stats.Moved++
+        }
         $stats.InvalidVid++
         continue
     }
@@ -682,6 +685,9 @@ foreach ($webm in $webmFiles) {
     # --- Quick frame check to ensure video isn't corrupted ---
     if (-not (Test-VideoHasFrames -FilePath $sourcePath -FfmpegExe $ffmpegExe)) {
         Write-Log "SKIP: No decodable frames found: $(Split-Path $sourcePath -Leaf)" "WARN"
+        if (Move-ToMisrecordings -SourcePath $sourcePath -Username $username -Reason "No decodable frames") {
+            $stats.Moved++
+        }
         $stats.InvalidVid++
         continue
     }
