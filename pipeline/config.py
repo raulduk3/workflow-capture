@@ -37,25 +37,21 @@ PROCESSING_LOG = os.path.join(OUTPUT_DIR, "processed.log")
 # Reports output directory
 REPORTS_DIR = os.path.join(OUTPUT_DIR, "reports")
 
-# Temp directory for frame extraction (cleaned up after each video)
-FRAMES_TEMP_DIR = os.path.join(os.environ.get("TEMP", r"C:\temp"), "WorkflowFrames")
+# Per-video analysis markdown output directory
+ANALYSES_DIR = os.path.join(OUTPUT_DIR, "analyses")
 
 # =============================================================================
 # Pipeline Settings
 # =============================================================================
 
-# Number of evenly-spaced frames to extract per video
-# 50 frames from a 5-min video = 1 frame every ~6 seconds
-# Optimized for maximum coverage while staying under token-per-minute limits
-# At 768px/258 tokens per frame = ~12,900 tokens per request + prompt
-FRAMES_PER_VIDEO = 50
-
-# Maximum frames to send to Gemini per request (cost control)
-MAX_FRAMES_TO_ANALYZE = 50
-
 # Delay between Gemini API calls in seconds (rate limit protection)
-# Increased to avoid hitting rate limits with large frame batches
 API_CALL_DELAY_SECONDS = 5.0
+
+# Video upload polling interval (seconds between File API state checks)
+VIDEO_UPLOAD_POLL_INTERVAL = 5
+
+# Maximum time to wait for Gemini to process an uploaded video (seconds)
+VIDEO_UPLOAD_TIMEOUT = int(os.environ.get("VIDEO_UPLOAD_TIMEOUT", "300"))
 
 # Maximum retries for Gemini API calls
 MAX_API_RETRIES = 5

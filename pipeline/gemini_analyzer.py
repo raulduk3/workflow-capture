@@ -1,35 +1,35 @@
 """
-L7S Workflow Analysis Pipeline - Gemini Vision Analyzer
+L7S Workflow Analysis Pipeline - Gemini Video Analyzer
 
-Sends extracted frames + structured prompt to Gemini Flash API.
-Returns structured JSON with: primary_app, app_sequence, detected_actions,
-friction_events, automation_score, workflow_category.
+Two-pass analysis using Gemini's File API:
+  Pass 1: Upload whole video + SOP/automation prompt → rich markdown (sections A-E)
+  Pass 2: Send markdown to Gemini → structured JSON for ML pipelines
 """
 
 import json
 import os
+import re
 import time
-from pathlib import Path
 from typing import Optional
 
 import google.genai as genai
 from google.genai import types
-from PIL import Image
 
 from config import (
     API_CALL_DELAY_SECONDS,
     GEMINI_API_KEY,
     GEMINI_MODEL,
     MAX_API_RETRIES,
-    MAX_FRAMES_TO_ANALYZE,
     RATE_LIMIT_INITIAL_BACKOFF,
+    VIDEO_UPLOAD_POLL_INTERVAL,
+    VIDEO_UPLOAD_TIMEOUT,
 )
 
 # =============================================================================
 # Gemini API Setup
 # =============================================================================
 
-_client = None
+_client: Optional[genai.Client] = None
 
 
 def _ensure_configured():
