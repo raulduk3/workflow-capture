@@ -17,7 +17,7 @@ load_dotenv(_pipeline_dir / ".env", override=True)
 
 # Source directory where .webm files are collected (network share or local)
 # Configure via WORKFLOW_SOURCE_SHARE environment variable or set below
-SOURCE_SHARE = os.environ.get("WORKFLOW_SOURCE_SHARE", r"\\SERVER\SHARE\workflow")
+SOURCE_SHARE = os.environ.get("WORKFLOW_SOURCE_SHARE", r"\\bulley-fs1\WORKFLOW").strip()
 
 # Local directory where MP4s are written by video conversion process
 MP4_DIR = r"C:\temp\WorkflowProcessing"
