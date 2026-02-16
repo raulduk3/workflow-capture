@@ -27,7 +27,7 @@ A 7-day sprint to build a lightweight analysis pipeline that watches videos, ext
 |--------|--------|--------------|
 | **L7S Workflow Capture** | ✅ Running | Desktop app records user screen when they start a task |
 | **Ninja RMM Extraction** | ✅ Running | Copies recordings to network share twice daily |
-| **Network Share** | ✅ Receiving | `\\bulley-fs1\workflow\{USERNAME}\` stores all videos |
+| **Source Directory** | ✅ Receiving | Configured source share stores all videos (network share or local path) |
 | **ActivTrak** | ✅ Active | Tracks productivity metrics, app usage, idle time |
 
 ### 1.2 What the Data Looks Like
@@ -153,7 +153,7 @@ Every video goes through four stages:
 
 ### 4.1 Location
 ```
-\\bulley-fs1\workflow\_outputs\workflow_analysis.csv
+Configured output directory\\workflow_analysis.csv
 ```
 
 ### 4.2 One Row Per Video

@@ -41,7 +41,7 @@ All analysis uses existing ML tooling. No custom model training required.
 This pipeline does not build custom models, automate any user workflows, make decisions on behalf of users, or require real-time processing. It produces data for human analysis.
 
 **Output.**
-A continuously growing CSV at `\\bulley-fs1\workflow\_outputs\workflow_analysis.csv` with one row per processed video. Key fields: `username`, `timestamp`, `task_description`, `primary_app`, `app_sequence`, `friction_events`, `friction_count`, `automation_score`, `workflow_category`.
+A continuously growing CSV at the configured output directory with one row per processed video. Key fields: `username`, `timestamp`, `task_description`, `primary_app`, `app_sequence`, `friction_events`, `friction_count`, `automation_score`, `workflow_category`.
 
 **Cost.**
 Gemini API: ~$3.50/day at 100 videos (35 frames each). Monthly estimate: ~$105. Storage: negligible.
