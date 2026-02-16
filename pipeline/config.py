@@ -116,8 +116,7 @@ GEMINI_MODEL = "gemini-2.0-flash"
 # CSV Schema
 # =============================================================================
 
-# Full schema (16 fields)
-# Core analysis pipeline: filename metadata + Gemini Vision + pattern detection
+# CSV schema: filename metadata + video metadata + Gemini analysis (two-pass)
 CSV_COLUMNS = [
     # From filename (7 fields)
     "video_id",
@@ -130,19 +129,20 @@ CSV_COLUMNS = [
     # From video file (2 fields)
     "duration_sec",
     "file_size_mb",
-    # From Gemini Vision (8 fields)
+    # From Gemini Pass 2 — structured ML fields (6 fields)
     "workflow_description",
     "primary_app",
     "app_sequence",
     "detected_actions",
-    "friction_events",
-    "friction_count",
     "automation_score",
     "workflow_category",
-    # Pattern flags (1 derived field)
-    "pattern_flags",
+    # From Gemini Pass 2 — new fields derived from rich analysis (3 fields)
+    "sop_step_count",
+    "automation_candidate_count",
+    "top_automation_candidate",
     # Metadata
     "source_path",
     "mp4_path",
+    "analysis_md_path",
     "processed_at",
 ]
