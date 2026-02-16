@@ -1,14 +1,12 @@
 """
 L7S Workflow Analysis Pipeline - Pattern Detector
 
-Applies rule-based pattern flags to analyzed videos.
-These provide immediate value without ML training data.
+DEPRECATED: This module is no longer used by the pipeline.
+The whole-video Gemini analysis (sections B+C of the new prompt) now provides
+richer, context-aware automation candidate ranking and planning that replaces
+these rule-based pattern flags.
 
-Patterns from the whitepaper (VIDEO_TO_INSIGHTS_PIPELINE.md section 5.1):
-  - Copy-Paste Heavy: 3+ copy-paste actions detected
-  - App Switch Loop: 6+ apps in sequence
-  - High Friction: 3+ friction events
-  - Automation Ready: automation_score >= 0.75
+Kept for reference only.
 """
 
 import json
