@@ -15,7 +15,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from config import ANALYSES_DIR, ANALYSIS_CSV, CSV_COLUMNS, OUTPUT_DIR, PROCESSING_LOG
+from config import ANALYSES_DIR, ANALYSIS_CSV, CONVERSION_CSV, CSV_COLUMNS, MISRECORDINGS_DIR, OUTPUT_DIR, PROCESSING_LOG, REJECTED_LOG
 
 
 def ensure_output_dir() -> None:
@@ -23,6 +23,78 @@ def ensure_output_dir() -> None:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(os.path.join(OUTPUT_DIR, "reports"), exist_ok=True)
     os.makedirs(ANALYSES_DIR, exist_ok=True)
+    os.makedirs(MISRECORDINGS_DIR, exist_ok=True)
+
+
+def move_to_misrecordings(source_path: str = "", mp4_path: str = "", reason: str = "") -> bool:
+    """
+    Move rejected video files to the _misrecordings folder.
+    Moves both the original .webm and the converted MP4 if they exist.
+
+    Args:
+        source_path: Path to the original .webm video file
+        mp4_path: Path to the converted MP4 file
+        reason: Optional reason for moving (used in log filename)
+
+    Returns:
+        True if at least one file was moved successfully, False otherwise.
+    """
+    import shutil
+    
+    moved_any = False
+    os.makedirs(MISRECORDINGS_DIR, exist_ok=True)
+    
+    # Move source .webm file
+    if source_path and os.path.isfile(source_path):
+        try:
+            filename = Path(source_path).name
+            dest_path = os.path.join(MISRECORDINGS_DIR, filename)
+            
+            # If destination already exists, add a timestamp
+            if os.path.exists(dest_path):
+                name_parts = Path(filename).stem
+                ext = Path(filename).suffix
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                dest_path = os.path.join(MISRECORDINGS_DIR, f"{name_parts}_{timestamp}{ext}")
+            
+            shutil.move(source_path, dest_path)
+            print(f"  Moved source to: {Path(dest_path).name}")
+            moved_any = True
+            
+            # Create a small log file with the reason (only once)
+            if reason:
+                reason_file = dest_path + ".reason.txt"
+                with open(reason_file, "w", encoding="utf-8") as f:
+                    f.write(f"Moved at: {datetime.now().isoformat()}\n")
+                    f.write(f"Reason: {reason}\n")
+                    
+        except Exception as e:
+            print(f"[ERROR] Failed to move source video: {e}")
+    
+    # Move converted MP4 file
+    if mp4_path and os.path.isfile(mp4_path):
+        try:
+            filename = Path(mp4_path).name
+            dest_path = os.path.join(MISRECORDINGS_DIR, filename)
+            
+            # If destination already exists, add a timestamp
+            if os.path.exists(dest_path):
+                name_parts = Path(filename).stem
+                ext = Path(filename).suffix
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                dest_path = os.path.join(MISRECORDINGS_DIR, f"{name_parts}_{timestamp}{ext}")
+            
+            shutil.move(mp4_path, dest_path)
+            print(f"  Moved MP4 to: {Path(dest_path).name}")
+            moved_any = True
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to move MP4 video: {e}")
+    
+    if not moved_any:
+        print(f"[WARN] No video files found to move")
+        
+    return moved_any
 
 
 def initialize_csv(csv_path: str = ANALYSIS_CSV) -> None:
@@ -61,7 +133,7 @@ def load_processed_ids(log_path: str = PROCESSING_LOG) -> set[str]:
 
 
 def mark_processed(video_id: str, log_path: str = PROCESSING_LOG) -> None:
-    """Append a video_id to the processing log."""
+    """Append a video_id to the processing log (only for successfully analyzed videos)."""
     ensure_output_dir()
 
     try:
@@ -69,6 +141,37 @@ def mark_processed(video_id: str, log_path: str = PROCESSING_LOG) -> None:
             f.write(f"{video_id}\n")
     except OSError as e:
         print(f"[ERROR] Could not write to processing log: {e}")
+
+
+def mark_rejected(video_id: str, reason: str = "") -> None:
+    """Append a video_id to the rejected log with reason."""
+    ensure_output_dir()
+
+    try:
+        with open(REJECTED_LOG, "a", encoding="utf-8") as f:
+            timestamp = datetime.now().isoformat(timespec="seconds")
+            f.write(f"{video_id}|{timestamp}|{reason}\n")
+    except OSError as e:
+        print(f"[ERROR] Could not write to rejected log: {e}")
+
+
+def load_rejected_ids() -> set[str]:
+    """Load the set of rejected video IDs."""
+    rejected = set()
+
+    if not os.path.isfile(REJECTED_LOG):
+        return rejected
+
+    try:
+        with open(REJECTED_LOG, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split("|")
+                if parts:
+                    rejected.add(parts[0])  # video_id is first field
+    except OSError as e:
+        print(f"[WARN] Could not read rejected log: {e}")
+
+    return rejected
 
 
 def append_row(
@@ -170,6 +273,72 @@ def build_row(
     row["processed_at"] = datetime.now().isoformat(timespec="seconds")
 
     return row
+
+
+def update_workflow_sessions_status(video_id: str, status: str, reason: str = "", sessions_csv: str = CONVERSION_CSV) -> bool:
+    """
+    Update the Status column in workflow_sessions.csv for a rejected video.
+
+    Args:
+        video_id: The video_id to update
+        status: Status to set (e.g., "Rejected", "Analyzed")
+        reason: Optional reason for the status
+        sessions_csv: Path to workflow_sessions.csv
+
+    Returns:
+        True if update was successful, False otherwise
+    """
+    if not os.path.isfile(sessions_csv):
+        print(f"[WARN] Sessions CSV not found: {sessions_csv}")
+        return False
+
+    try:
+        # Read all rows
+        with open(sessions_csv, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+            fieldnames = reader.fieldnames
+
+        # Add Status column if it doesn't exist
+        if fieldnames and "Status" not in fieldnames:
+            fieldnames = list(fieldnames) + ["Status", "RejectionReason"]
+            # Add empty values to existing rows
+            for row in rows:
+                row["Status"] = row.get("Status", "Converted")
+                row["RejectionReason"] = row.get("RejectionReason", "")
+
+        # Find and update the matching row(s)
+        updated = False
+        for row in rows:
+            source_path = row.get("SourcePath", "")
+            mp4_path = row.get("Mp4Path", "")
+            
+            # Generate video_id from source or mp4 path (matching load_converted_sessions logic)
+            import hashlib
+            id_source = source_path if source_path else mp4_path
+            row_video_id = hashlib.sha256(id_source.encode("utf-8")).hexdigest()[:12]
+            
+            if row_video_id == video_id:
+                row["Status"] = status
+                row["RejectionReason"] = reason
+                updated = True
+
+        if not updated:
+            print(f"[WARN] Video ID not found in sessions CSV: {video_id}")
+            return False
+
+        # Write back the updated CSV
+        with open(sessions_csv, "w", newline="", encoding="utf-8") as f:
+            if fieldnames:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+
+        return True
+
+    except (OSError, csv.Error) as e:
+        print(f"[ERROR] Failed to update sessions CSV: {e}")
+        return False
 
 
 def save_analysis_markdown(

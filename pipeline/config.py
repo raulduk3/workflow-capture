@@ -31,8 +31,11 @@ OUTPUT_DIR = MP4_DIR
 # Main analysis CSV (one row per video, cumulative)
 ANALYSIS_CSV = os.path.join(OUTPUT_DIR, "workflow_analysis.csv")
 
-# Processing log (one video_id per line for dedup)
+# Processing log (one video_id per line for dedup - only successfully analyzed videos)
 PROCESSING_LOG = os.path.join(OUTPUT_DIR, "processed.log")
+
+# Rejected videos log (videos that failed validation/quality checks)
+REJECTED_LOG = os.path.join(OUTPUT_DIR, "rejected.log")
 
 # Reports output directory
 REPORTS_DIR = os.path.join(OUTPUT_DIR, "reports")
@@ -61,6 +64,19 @@ RATE_LIMIT_INITIAL_BACKOFF = 10.0
 
 # Minimum file size in bytes to consider a video valid (skip corrupt/empty)
 MIN_FILE_SIZE_BYTES = 10_000  # 10 KB
+
+# =============================================================================
+# Video Quality Filtering
+# =============================================================================
+
+# Minimum video duration in seconds to consider valid (skip accidental recordings)
+MIN_VIDEO_DURATION_SEC = 5
+
+# Maximum video duration in seconds (skip all-day recordings)
+MAX_VIDEO_DURATION_SEC = 3600  # 1 hour
+
+# Directory for misrecorded/invalid videos
+MISRECORDINGS_DIR = os.path.join(OUTPUT_DIR, "_misrecordings")
 
 # =============================================================================
 # FFmpeg / FFprobe

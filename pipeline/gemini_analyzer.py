@@ -59,6 +59,30 @@ def _get_client():
 # Prompts
 # =============================================================================
 
+# Pass 0: Quick validation check (is this a useful workflow recording?)
+VALIDATION_PROMPT = """You are a video quality analyst. Determine if this screen recording is a USEFUL workflow recording worth analyzing.
+
+A video is USEFUL if it shows:
+- A person actively completing a work task
+- Clear interaction with applications, forms, or systems
+- A coherent sequence of actions with a goal
+- Real workflow behavior (not just idle desktop, menus, system settings, or testing)
+
+A video is NOT USEFUL if it shows:
+- Accidental/test recordings (just opening apps, no real work)
+- System setup, installation, or configuration
+- Just browsing menus without completing a task
+- Idle desktop with minimal activity
+- Corrupted/glitched video
+- Software testing or troubleshooting (unless it's a recurring task)
+- Personal activities (social media, entertainment)
+
+Analyze the video briefly and respond with ONLY a JSON object:
+{{
+    "is_useful": true or false,
+    "reason": "Brief explanation (1-2 sentences)"
+}}"""
+
 # Pass 1: Rich workflow analysis prompt (produces markdown sections A-E)
 ANALYSIS_PROMPT = """You are an AI workflow analyst.
 Your job is to audit how I complete a recurring work task and identify:
@@ -75,7 +99,7 @@ Treat this input as if you watched me complete the task end-to-end.
 
 OUTPUT THE FOLLOWING SECTIONS (STRICT):
 
-### A) SOP — Step-by-step process
+### A) SOP (Standard Operating Procedure) — Step-by-step process
 
 Write the exact steps I followed, in order.
 - Use numbered steps
@@ -244,6 +268,84 @@ def _parse_markdown_response(markdown_text: str) -> dict:
         sections[key] = markdown_text[start:end].strip()
 
     return sections
+
+
+# =============================================================================
+# Video Validation
+# =============================================================================
+
+
+def validate_video(
+    video_path: str,
+    video_id: str = "",
+) -> dict:
+    """
+    Quick validation check: Is this video a useful workflow recording?
+
+    Args:
+        video_path: Path to the video file.
+        video_id: Identifier for logging.
+
+    Returns:
+        Dict with:
+            "is_useful": bool -- True if worth analyzing
+            "reason": str -- Brief explanation
+        Returns {"is_useful": False, "reason": "error"} on failure.
+    """
+    _ensure_configured()
+
+    if not os.path.isfile(video_path):
+        print(f"[ERROR] Video file not found: {video_path}")
+        return {"is_useful": False, "reason": "Video file not found"}
+
+    client = _get_client()
+    video_file = None
+
+    try:
+        # Upload video
+        video_file = _upload_video(video_path, video_id)
+
+        # Quick validation check
+        print(f"  Validation check: Is this a useful workflow recording?")
+        
+        json_text = _call_gemini(
+            client=client,
+            contents=[video_file, VALIDATION_PROMPT],
+            video_id=video_id,
+            pass_name="Validation",
+            use_json=True,
+        )
+
+        if not json_text:
+            return {"is_useful": False, "reason": "Validation check failed"}
+
+        # Parse the JSON response
+        try:
+            result = json.loads(json_text)
+            is_useful = result.get("is_useful", False)
+            reason = result.get("reason", "No reason provided")
+            
+            print(f"  Result: {'USEFUL' if is_useful else 'NOT USEFUL'} - {reason}")
+            
+            return {
+                "is_useful": is_useful,
+                "reason": reason
+            }
+        except json.JSONDecodeError:
+            print(f"[ERROR] Could not parse validation response")
+            return {"is_useful": False, "reason": "Invalid validation response"}
+
+    except (TimeoutError, RuntimeError) as e:
+        print(f"[ERROR] Validation failed: {e}")
+        return {"is_useful": False, "reason": str(e)}
+
+    finally:
+        # Clean up uploaded file
+        if video_file:
+            try:
+                client.files.delete(name=video_file.name)
+            except Exception:
+                pass
 
 
 # =============================================================================

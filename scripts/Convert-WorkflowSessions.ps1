@@ -19,7 +19,7 @@
 
 param(
     [Parameter(Mandatory=$false)]
-    [string]$SourceShare = [Environment]::GetEnvironmentVariable("WORKFLOW_SOURCE_SHARE") ?? "\\\\SERVER\\SHARE\\workflow",
+    [string]$SourceShare = [Environment]::GetEnvironmentVariable("WORKFLOW_SOURCE_SHARE") ?? "\\bulley-fs1\WORKFLOW",
 
     [Parameter(Mandatory=$false)]
     [string]$OutputRoot = "C:\temp\WorkflowProcessing",
@@ -457,7 +457,7 @@ function Initialize-CsvFile {
     param([string]$Path)
 
     if (-not (Test-Path $Path)) {
-        $header = "SourcePath,Mp4Path,Username,Date,Time,Timestamp,MachineName,TaskDescription,DayOfWeek,HourOfDay,DurationSeconds,FileSizeMB,ConvertedAt"
+        $header = "SourcePath,Mp4Path,Username,Date,Time,Timestamp,MachineName,TaskDescription,DayOfWeek,HourOfDay,DurationSeconds,FileSizeMB,ConvertedAt,Status"
         [System.IO.File]::WriteAllText($Path, "$header`r`n", [System.Text.UTF8Encoding]::new($false))
         Write-Log "Created CSV: $Path"
     }
@@ -512,7 +512,8 @@ function Append-CsvRow {
         $Data.HourOfDay,
         $Data.DurationSeconds,
         $Data.FileSizeMB,
-        $Data.ConvertedAt
+        $Data.ConvertedAt,
+        "Converted"
     ) -join ","
 
     Add-Content -Path $Path -Value $row -Encoding UTF8

@@ -94,7 +94,10 @@ $overallSuccess = $true
 # Pre-flight: Validate source directory connectivity
 # =============================================================================
 
-$sourceShare = [Environment]::GetEnvironmentVariable("WORKFLOW_SOURCE_SHARE") ?? "\\\\SERVER\\SHARE\\workflow"
+$sourceShare = [Environment]::GetEnvironmentVariable("WORKFLOW_SOURCE_SHARE")
+if (-not $sourceShare) {
+    $sourceShare = "\\bulley-fs1\WORKFLOW"
+}
 $shareRetries = 3
 $shareAvailable = $false
 
@@ -200,8 +203,11 @@ if (-not $pythonExe) {
 } else {
     Write-Log "Python: $pythonExe"
 
+    # Force unbuffered Python output
+    $env:PYTHONUNBUFFERED = "1"
+
     # Build args
-    $pyArgs = @($PipelineScript)
+    $pyArgs = @("-u", $PipelineScript)
     if ($User) { $pyArgs += "--user"; $pyArgs += $User }
     if ($Limit -gt 0) { $pyArgs += "--limit"; $pyArgs += $Limit.ToString() }
     if ($DryRun) { $pyArgs += "--dry-run" }
@@ -210,9 +216,13 @@ if (-not $pythonExe) {
 
     try {
         # Run with working directory set to pipeline folder
+        # Using & operator to see real-time output
         Push-Location $PipelineDir
+        Write-Log "Starting Python pipeline..." "INFO"
+        
         & $pythonExe @pyArgs
         $pyExit = $LASTEXITCODE
+        
         Pop-Location
 
         if ($pyExit -eq 0) {
