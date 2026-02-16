@@ -16,6 +16,7 @@ Videos failing quality check are rejected without saving (one upload, smart filt
 """
 
 import json
+import mimetypes
 import os
 import re
 import time
@@ -29,6 +30,7 @@ from config import (
     GEMINI_API_KEY,
     GEMINI_MODEL,
     MAX_API_RETRIES,
+    MIN_FILE_SIZE_BYTES,
     RATE_LIMIT_INITIAL_BACKOFF,
     VIDEO_UPLOAD_POLL_INTERVAL,
     VIDEO_UPLOAD_TIMEOUT,
@@ -174,6 +176,22 @@ Return ONLY the JSON object, no additional text."""
 # =============================================================================
 
 
+def _guess_video_mime_type(video_path: str) -> Optional[str]:
+    """Best-effort guess for a supported video mime type."""
+    ext = os.path.splitext(video_path)[1].lower()
+    if ext in (".mp4", ".m4v"):
+        return "video/mp4"
+    if ext in (".mov", ".qt"):
+        return "video/quicktime"
+    if ext in (".webm",):
+        return "video/webm"
+
+    guessed, _ = mimetypes.guess_type(video_path)
+    if guessed and guessed.startswith("video/"):
+        return guessed
+    return None
+
+
 def _upload_video(video_path: str, video_id: str = "") -> object:
     """
     Upload a video file to Gemini File API and wait for processing.
@@ -183,8 +201,27 @@ def _upload_video(video_path: str, video_id: str = "") -> object:
     """
     client = _get_client()
 
-    print(f"  Uploading video to Gemini File API...")
-    video_file = client.files.upload(file=video_path)
+    file_size_bytes = os.path.getsize(video_path)
+    if file_size_bytes < MIN_FILE_SIZE_BYTES:
+        raise RuntimeError(
+            f"Video file too small ({file_size_bytes} bytes) for {video_id}"
+        )
+
+    mime_type = _guess_video_mime_type(video_path)
+    if not mime_type:
+        raise ValueError(
+            f"Unsupported video format for {video_id}: {os.path.basename(video_path)}"
+        )
+
+    print(f"  Uploading video to Gemini File API... ({mime_type})")
+    try:
+        video_file = client.files.upload(file=video_path, mime_type=mime_type)
+    except Exception as e:
+        if "invalid_argument" in str(e).lower():
+            raise RuntimeError(
+                f"Gemini File API rejected the upload for {video_id}: {e}"
+            )
+        raise
     print(f"  Upload complete, waiting for processing...")
 
     elapsed = 0
@@ -352,7 +389,7 @@ def analyze_video(
             "rejection_reason": "",
         }
 
-    except (TimeoutError, RuntimeError) as e:
+    except (TimeoutError, RuntimeError, ValueError) as e:
         print(f"[ERROR] {e}")
         return None
 
