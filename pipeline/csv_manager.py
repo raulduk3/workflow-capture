@@ -1,25 +1,28 @@
 """
 L7S Workflow Analysis Pipeline - CSV Manager
 
-Manages the append-only analysis CSV and processing log.
+Manages the append-only analysis CSV, processing log, and per-video markdown files.
 - Creates CSV with header if it doesn't exist
 - Appends new rows (one per analyzed video)
 - Deduplicates by video_id via processing log
+- Saves per-video markdown analysis files
 - Never overwrites existing data
 """
 
 import csv
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
-from config import ANALYSIS_CSV, CSV_COLUMNS, OUTPUT_DIR, PROCESSING_LOG
+from config import ANALYSES_DIR, ANALYSIS_CSV, CSV_COLUMNS, OUTPUT_DIR, PROCESSING_LOG
 
 
 def ensure_output_dir() -> None:
-    """Create the output directory and reports subdirectory if they don't exist."""
+    """Create the output directory, reports, and analyses subdirectories if they don't exist."""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(os.path.join(OUTPUT_DIR, "reports"), exist_ok=True)
+    os.makedirs(ANALYSES_DIR, exist_ok=True)
 
 
 def initialize_csv(csv_path: str = ANALYSIS_CSV) -> None:
@@ -106,8 +109,8 @@ def append_row(
 def build_row(
     parsed_metadata: dict,
     video_metadata: dict,
-    gemini_analysis: dict,
-    pattern_flags: str,
+    gemini_structured: dict,
+    analysis_md_path: str = "",
     mp4_path: str = "",
 ) -> dict:
     """
@@ -116,8 +119,8 @@ def build_row(
     Args:
         parsed_metadata: From filename_parser.parse_filename()
         video_metadata: From frame_extractor.get_video_metadata()
-        gemini_analysis: From gemini_analyzer.analyze_video()
-        pattern_flags: From pattern_detector.detect_patterns()
+        gemini_structured: From gemini_analyzer.analyze_video()["structured"]
+        analysis_md_path: Path to the saved per-video markdown file
         mp4_path: Path to the converted MP4 file (if available)
 
     Returns:
@@ -138,40 +141,84 @@ def build_row(
     row["duration_sec"] = video_metadata.get("duration_sec", -1)
     row["file_size_mb"] = video_metadata.get("file_size_mb", 0)
 
-    # From Gemini analysis
-    if gemini_analysis:
-        row["workflow_description"] = gemini_analysis.get("workflow_description", "")
-        row["primary_app"] = gemini_analysis.get("primary_app", "")
-        row["app_sequence"] = gemini_analysis.get("app_sequence", "[]")
-        row["detected_actions"] = gemini_analysis.get("detected_actions", "[]")
-        row["friction_events"] = gemini_analysis.get("friction_events", "[]")
-        row["friction_count"] = gemini_analysis.get("friction_count", 0)
-        row["automation_score"] = gemini_analysis.get("automation_score", 0.0)
-        row["workflow_category"] = gemini_analysis.get("workflow_category", "")
+    # From Gemini Pass 2 structured analysis
+    if gemini_structured:
+        row["workflow_description"] = gemini_structured.get("workflow_description", "")
+        row["primary_app"] = gemini_structured.get("primary_app", "")
+        row["app_sequence"] = gemini_structured.get("app_sequence", "[]")
+        row["detected_actions"] = gemini_structured.get("detected_actions", "[]")
+        row["automation_score"] = gemini_structured.get("automation_score", 0.0)
+        row["workflow_category"] = gemini_structured.get("workflow_category", "")
+        row["sop_step_count"] = gemini_structured.get("sop_step_count", 0)
+        row["automation_candidate_count"] = gemini_structured.get("automation_candidate_count", 0)
+        row["top_automation_candidate"] = gemini_structured.get("top_automation_candidate", "")
     else:
         row["workflow_description"] = ""
         row["primary_app"] = ""
         row["app_sequence"] = "[]"
         row["detected_actions"] = "[]"
-        row["friction_events"] = "[]"
-        row["friction_count"] = 0
         row["automation_score"] = 0.0
         row["workflow_category"] = ""
-
-    # Pattern flags
-    row["pattern_flags"] = pattern_flags
-
-    # ActivTrak fields (deferred - empty for now)
-    row["activtrak_productive_pct"] = ""
-    row["activtrak_idle_min"] = ""
-    row["activtrak_top_apps"] = ""
+        row["sop_step_count"] = 0
+        row["automation_candidate_count"] = 0
+        row["top_automation_candidate"] = ""
 
     # Metadata
     row["source_path"] = parsed_metadata.get("source_path", "")
     row["mp4_path"] = mp4_path
+    row["analysis_md_path"] = analysis_md_path
     row["processed_at"] = datetime.now().isoformat(timespec="seconds")
 
     return row
+
+
+def save_analysis_markdown(
+    video_id: str,
+    username: str,
+    task_description: str,
+    markdown_content: str,
+    analyses_dir: str = ANALYSES_DIR,
+) -> str:
+    """
+    Save per-video markdown analysis to a file.
+
+    Args:
+        video_id: Unique video identifier.
+        username: User who recorded the video.
+        task_description: The stated task.
+        markdown_content: Full markdown analysis from Gemini Pass 1.
+        analyses_dir: Output directory for markdown files.
+
+    Returns:
+        Path to the saved file.
+    """
+    os.makedirs(analyses_dir, exist_ok=True)
+
+    # Sanitize task description for filename
+    safe_task = re.sub(r'[^\w\s-]', '', task_description).strip()
+    safe_task = re.sub(r'[\s]+', '_', safe_task)[:50]
+
+    filename = f"{video_id}_{username}_{safe_task}.md"
+    filepath = os.path.join(analyses_dir, filename)
+
+    # Build file with metadata header
+    header = f"""---
+video_id: {video_id}
+username: {username}
+task: {task_description}
+analyzed_at: {datetime.now().isoformat(timespec="seconds")}
+---
+
+"""
+
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(header)
+            f.write(markdown_content)
+        return filepath
+    except OSError as e:
+        print(f"[ERROR] Could not save analysis markdown: {e}")
+        return ""
 
 
 def get_csv_stats(csv_path: str = ANALYSIS_CSV) -> dict:
@@ -220,6 +267,7 @@ if __name__ == "__main__":
     print("CSV Manager - Status")
     print(f"  CSV path: {ANALYSIS_CSV}")
     print(f"  Log path: {PROCESSING_LOG}")
+    print(f"  Analyses dir: {ANALYSES_DIR}")
 
     processed = load_processed_ids()
     print(f"  Processed IDs: {len(processed)}")
