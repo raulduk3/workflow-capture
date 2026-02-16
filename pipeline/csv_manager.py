@@ -267,7 +267,14 @@ def build_row(
     return row
 
 
-def update_workflow_sessions_status(video_id: str, status: str, reason: str = "", sessions_csv: str = CONVERSION_CSV) -> bool:
+def update_workflow_sessions_status(
+    video_id: str,
+    status: str,
+    reason: str = "",
+    sessions_csv: str = CONVERSION_CSV,
+    source_path: str = "",
+    mp4_path: str = "",
+) -> bool:
     """
     Update the Status column in workflow_sessions.csv for a rejected video.
 
@@ -285,15 +292,31 @@ def update_workflow_sessions_status(video_id: str, status: str, reason: str = ""
         return False
 
     try:
+        import hashlib
+
+        normalized_source = (source_path or "").strip()
+        normalized_mp4 = (mp4_path or "").strip()
+        basename_source = Path(normalized_source).name if normalized_source else ""
+        basename_mp4 = Path(normalized_mp4).name if normalized_mp4 else ""
+
+        candidate_ids = set()
+        for candidate in (normalized_source, normalized_mp4):
+            if candidate:
+                candidate_ids.add(hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:12])
         # Read all rows
         with open(sessions_csv, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             rows = list(reader)
             fieldnames = reader.fieldnames
 
-        # Add Status column if it doesn't exist
-        if fieldnames and "Status" not in fieldnames:
-            fieldnames = list(fieldnames) + ["Status", "RejectionReason"]
+        # Add Status/RejectionReason columns if they don't exist
+        if fieldnames:
+            fieldnames = list(fieldnames)
+            if "Status" not in fieldnames:
+                fieldnames.append("Status")
+            if "RejectionReason" not in fieldnames:
+                fieldnames.append("RejectionReason")
+
             # Add empty values to existing rows
             for row in rows:
                 row["Status"] = row.get("Status", "Converted")
@@ -302,15 +325,26 @@ def update_workflow_sessions_status(video_id: str, status: str, reason: str = ""
         # Find and update the matching row(s)
         updated = False
         for row in rows:
-            source_path = row.get("SourcePath", "")
-            mp4_path = row.get("Mp4Path", "")
-            
+            row_source = (row.get("SourcePath", "") or "").strip()
+            row_mp4 = (row.get("Mp4Path", "") or "").strip()
+
             # Generate video_id from source or mp4 path (matching load_converted_sessions logic)
-            import hashlib
-            id_source = source_path if source_path else mp4_path
+            id_source = row_source if row_source else row_mp4
+            if not id_source:
+                continue
             row_video_id = hashlib.sha256(id_source.encode("utf-8")).hexdigest()[:12]
-            
-            if row_video_id == video_id:
+
+            filename_match = False
+            if basename_source or basename_mp4:
+                row_basename_source = Path(row_source).name if row_source else ""
+                row_basename_mp4 = Path(row_mp4).name if row_mp4 else ""
+                filename_match = any(
+                    name
+                    and (name == row_basename_source or name == row_basename_mp4)
+                    for name in (basename_source, basename_mp4)
+                )
+
+            if row_video_id == video_id or row_video_id in candidate_ids or filename_match:
                 row["Status"] = status
                 row["RejectionReason"] = reason
                 updated = True
@@ -322,7 +356,7 @@ def update_workflow_sessions_status(video_id: str, status: str, reason: str = ""
         # Write back the updated CSV
         with open(sessions_csv, "w", newline="", encoding="utf-8") as f:
             if fieldnames:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
                 writer.writeheader()
                 writer.writerows(rows)
 
