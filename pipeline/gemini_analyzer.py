@@ -1,9 +1,18 @@
 """
 L7S Workflow Analysis Pipeline - Gemini Video Analyzer
 
-Two-pass analysis using Gemini's File API:
+Two-pass analysis with quality check using Gemini's File API:
   Pass 1: Upload whole video + SOP/automation prompt → rich markdown (sections A-E)
   Pass 2: Send markdown to Gemini → structured JSON for ML pipelines
+  Quality Check: Evaluate Pass 2 results to filter low-quality/non-workflow videos
+  
+Quality indicators:
+  - Primary app detected (not Unknown/N/A)
+  - Automation score ≥ 0.3
+  - SOP steps > 0
+  - Meaningful workflow description
+
+Videos failing quality check are rejected without saving (one upload, smart filtering).
 """
 
 import json
@@ -58,30 +67,6 @@ def _get_client():
 # =============================================================================
 # Prompts
 # =============================================================================
-
-# Pass 0: Quick validation check (is this a useful workflow recording?)
-VALIDATION_PROMPT = """You are a video quality analyst. Determine if this screen recording is a USEFUL workflow recording worth analyzing.
-
-A video is USEFUL if it shows:
-- A person actively completing a work task
-- Clear interaction with applications, forms, or systems
-- A coherent sequence of actions with a goal
-- Real workflow behavior (not just idle desktop, menus, system settings, or testing)
-
-A video is NOT USEFUL if it shows:
-- Accidental/test recordings (just opening apps, no real work)
-- System setup, installation, or configuration
-- Just browsing menus without completing a task
-- Idle desktop with minimal activity
-- Corrupted/glitched video
-- Software testing or troubleshooting (unless it's a recurring task)
-- Personal activities (social media, entertainment)
-
-Analyze the video briefly and respond with ONLY a JSON object:
-{{
-    "is_useful": true or false,
-    "reason": "Brief explanation (1-2 sentences)"
-}}"""
 
 # Pass 1: Rich workflow analysis prompt (produces markdown sections A-E)
 ANALYSIS_PROMPT = """You are an AI workflow analyst.
@@ -271,85 +256,7 @@ def _parse_markdown_response(markdown_text: str) -> dict:
 
 
 # =============================================================================
-# Video Validation
-# =============================================================================
-
-
-def validate_video(
-    video_path: str,
-    video_id: str = "",
-) -> dict:
-    """
-    Quick validation check: Is this video a useful workflow recording?
-
-    Args:
-        video_path: Path to the video file.
-        video_id: Identifier for logging.
-
-    Returns:
-        Dict with:
-            "is_useful": bool -- True if worth analyzing
-            "reason": str -- Brief explanation
-        Returns {"is_useful": False, "reason": "error"} on failure.
-    """
-    _ensure_configured()
-
-    if not os.path.isfile(video_path):
-        print(f"[ERROR] Video file not found: {video_path}")
-        return {"is_useful": False, "reason": "Video file not found"}
-
-    client = _get_client()
-    video_file = None
-
-    try:
-        # Upload video
-        video_file = _upload_video(video_path, video_id)
-
-        # Quick validation check
-        print(f"  Validation check: Is this a useful workflow recording?")
-        
-        json_text = _call_gemini(
-            client=client,
-            contents=[video_file, VALIDATION_PROMPT],
-            video_id=video_id,
-            pass_name="Validation",
-            use_json=True,
-        )
-
-        if not json_text:
-            return {"is_useful": False, "reason": "Validation check failed"}
-
-        # Parse the JSON response
-        try:
-            result = json.loads(json_text)
-            is_useful = result.get("is_useful", False)
-            reason = result.get("reason", "No reason provided")
-            
-            print(f"  Result: {'USEFUL' if is_useful else 'NOT USEFUL'} - {reason}")
-            
-            return {
-                "is_useful": is_useful,
-                "reason": reason
-            }
-        except json.JSONDecodeError:
-            print(f"[ERROR] Could not parse validation response")
-            return {"is_useful": False, "reason": "Invalid validation response"}
-
-    except (TimeoutError, RuntimeError) as e:
-        print(f"[ERROR] Validation failed: {e}")
-        return {"is_useful": False, "reason": str(e)}
-
-    finally:
-        # Clean up uploaded file
-        if video_file:
-            try:
-                client.files.delete(name=video_file.name)
-            except Exception:
-                pass
-
-
-# =============================================================================
-# Analysis (Two-Pass)
+# Analysis (Two-Pass with Quality Check)
 # =============================================================================
 
 
@@ -362,7 +269,8 @@ def analyze_video(
     Upload video to Gemini and perform two-pass analysis.
 
     Pass 1: Rich markdown analysis (SOP, automation candidates, etc.)
-    Pass 2: Structured JSON extraction for ML pipelines.
+    Quality check: Evaluate Pass 1 results before continuing
+    Pass 2: Structured JSON extraction (only if Pass 1 shows useful content)
 
     Args:
         video_path: Path to the MP4 video file.
@@ -374,6 +282,8 @@ def analyze_video(
             "markdown": str -- full Pass 1 response
             "sections": dict -- parsed A-E sections
             "structured": dict -- Pass 2 JSON for CSV/ML
+            "is_useful": bool -- True if quality check passed
+            "rejection_reason": str -- Why it was rejected (if is_useful=False)
         None on failure.
     """
     _ensure_configured()
@@ -406,8 +316,8 @@ def analyze_video(
 
         sections = _parse_markdown_response(markdown_text)
 
-        # --- Pass 2: Structured extraction ---
-        print(f"  Pass 2: Extracting structured ML features...")
+        # --- Quick Pass 2 to check quality (cheaper than separate validation) ---
+        print(f"  Pass 2: Extracting structured features...")
         extraction_prompt = EXTRACTION_PROMPT.format(analysis_markdown=markdown_text)
 
         json_text = _call_gemini(
@@ -420,10 +330,26 @@ def analyze_video(
 
         structured = _parse_json_response(json_text, video_id) if json_text else _empty_structured()
 
+        # --- Quality Check: Is this a useful workflow recording? ---
+        quality_check = _check_analysis_quality(structured)
+        
+        if not quality_check["is_useful"]:
+            print(f"  Quality check FAILED: {quality_check['reason']}")
+            return {
+                "markdown": markdown_text,
+                "sections": sections,
+                "structured": structured,
+                "is_useful": False,
+                "rejection_reason": quality_check["reason"],
+            }
+
+        print(f"  Quality check PASSED: Useful workflow detected")
         return {
             "markdown": markdown_text,
             "sections": sections,
             "structured": structured,
+            "is_useful": True,
+            "rejection_reason": "",
         }
 
     except (TimeoutError, RuntimeError) as e:
@@ -572,6 +498,41 @@ def _safe_int(value) -> int:
         return int(float(value))
     except (ValueError, TypeError):
         return 0
+
+
+def _check_analysis_quality(structured: dict) -> dict:
+    """
+    Check if the structured analysis indicates a useful workflow recording.
+    
+    Low-quality indicators:
+    - Primary app is Unknown/N/A/empty
+    - Automation score very low (< 0.3)
+    - No SOP steps detected
+    - No workflow description
+    
+    Returns:
+        Dict with "is_useful" (bool) and "reason" (str)
+    """
+    primary_app = structured.get("primary_app", "").strip()
+    automation_score = structured.get("automation_score", 0.0)
+    sop_steps = structured.get("sop_step_count", 0)
+    workflow_desc = structured.get("workflow_description", "").strip()
+    
+    # Check for clear "not useful" signals
+    if primary_app in ("", "Unknown", "N/A", "None"):
+        return {"is_useful": False, "reason": "No application detected"}
+    
+    if sop_steps == 0:
+        return {"is_useful": False, "reason": "No workflow steps detected"}
+    
+    if automation_score < 0.3:
+        return {"is_useful": False, "reason": f"Very low automation potential (score: {automation_score})"}
+    
+    if not workflow_desc or len(workflow_desc) < 20:
+        return {"is_useful": False, "reason": "No meaningful workflow description"}
+    
+    # Passed quality checks
+    return {"is_useful": True, "reason": ""}
 
 
 if __name__ == "__main__":
