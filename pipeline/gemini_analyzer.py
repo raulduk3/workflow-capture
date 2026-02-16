@@ -56,29 +56,98 @@ def _get_client():
 
 
 # =============================================================================
-# Analysis Prompt
+# Prompts
 # =============================================================================
 
-ANALYSIS_PROMPT = """You are analyzing screenshots from a screen recording of someone performing a work task on their computer.
+# Pass 1: Rich workflow analysis prompt (produces markdown sections A-E)
+ANALYSIS_PROMPT = """You are an AI workflow analyst.
+Your job is to audit how I complete a recurring work task and identify:
+1) the exact steps I follow
+2) what should and should not be automated
+3) how to automate it safely
+4) how to explain the findings visually
 
-**Task the user said they were doing:** "{task_description}"
+INPUT:
+I will provide a screen recording of me completing the task.
+The user described this task as: "{task_description}"
+Treat this input as if you watched me complete the task end-to-end.
 
-Analyze all the provided screenshots and extract the following information. Look carefully at:
-- Which applications are visible (window titles, UI elements)
-- What the user is doing in each frame (data entry, reading, navigating, copying, etc.)
-- Any signs of friction: error messages, repeated actions, excessive app switching, long pauses on the same screen, confusing UI states
-- Whether this workflow could be partially or fully automated
+TASK:
+This is a recurring workflow that takes multiple hours and involves multiple tools and decision points.
 
-Return your analysis as a JSON object with exactly these fields:
+---
+
+OUTPUT THE FOLLOWING SECTIONS (STRICT):
+
+### A) SOP — Step-by-step process
+
+Write the exact steps I followed, in order.
+- Use numbered steps
+- Include decision points (if X, then Y)
+- Call out tools used at each step
+- Be precise, not high-level
+
+### B) Automation candidates (ranked)
+
+Identify the top 5 parts of this workflow that are best to automate first.
+Rank them by:
+1) Repetition
+2) Low risk
+3) Clear inputs / outputs
+4) Time saved
+
+For each candidate, include:
+- Why it's a good automation target
+- Estimated effort: Low / Medium / High
+- Estimated risk: Low / Medium / High
+
+### C) Automation plan
+
+For each automation candidate, propose:
+1) A "quick win" automation (no-code / built-in tools)
+2) A "robust" automation (workflow tool, agent, or code-based)
+
+Also include:
+- What should NOT be automated yet
+- Why (human judgment, quality risk, edge cases, compliance)
+
+### D) Visual / infographic plan
+
+Design a visual explanation of this workflow and automation plan.
+Include:
+- A clear title
+- Sections for: SOP, automation opportunities, what not to automate
+- Suggested layout (flow diagram, columns, icons)
+- Short, punchy labels suitable for an infographic or slide
+Do NOT generate the image yet.
+Only plan it.
+
+### E) Clarifying questions
+
+Ask me 5 specific questions that would help you automate this perfectly.
+These should surface missing context rather than guessing"""
+
+
+# Pass 2: Structured feature extraction prompt (produces JSON for ML)
+EXTRACTION_PROMPT = """You are a data extraction assistant. Given the following workflow analysis, extract structured data as a JSON object.
+
+WORKFLOW ANALYSIS:
+---
+{analysis_markdown}
+---
+
+Return a JSON object with exactly these fields:
 
 {{
-    "workflow_description": "A concise 1-2 sentence summary of what the user is actually doing in this recording, based on what you observe in the screenshots (e.g., 'User is processing vendor invoices in Excel, cross-referencing amounts against a Procore budget, then emailing approvals via Outlook.')",
-    "primary_app": "The application that appears most frequently across the screenshots (e.g., 'Excel', 'Outlook', 'Procore', 'Chrome', 'SAP')",
-    "app_sequence": ["Ordered list of distinct applications used, in the order they first appear"],
-    "detected_actions": ["List of actions observed (e.g., 'data entry', 'copy-paste', 'form filling', 'email reading', 'file navigation', 'report generation', 'approval workflow', 'manual calculation')"],
-    "friction_events": ["List of specific friction points observed (e.g., 'error dialog appeared', 'user repeated same action', 'switched between 3 apps to copy data', 'long pause suggesting confusion', 'manual data re-entry between systems')"],
+    "workflow_description": "A concise 1-2 sentence summary of what the user is doing in this workflow",
+    "primary_app": "The application used most frequently (e.g., 'Excel', 'Outlook', 'Procore', 'Chrome', 'SAP')",
+    "app_sequence": ["Ordered list of distinct applications used, in the order they first appear in the SOP"],
+    "detected_actions": ["List of action types observed (e.g., 'data entry', 'copy-paste', 'form filling', 'email reading', 'file navigation', 'report generation', 'approval workflow', 'manual calculation')"],
     "automation_score": 0.0,
-    "workflow_category": "One of: data_entry, reporting, communication, document_review, financial_processing, project_management, payroll, procurement, approval_workflow, other"
+    "workflow_category": "One of: data_entry, reporting, communication, document_review, financial_processing, project_management, payroll, procurement, approval_workflow, other",
+    "sop_step_count": 0,
+    "automation_candidate_count": 0,
+    "top_automation_candidate": "Name or short description of the #1 ranked automation candidate"
 }}
 
 Guidelines for automation_score (0.0 to 1.0):
@@ -88,206 +157,291 @@ Guidelines for automation_score (0.0 to 1.0):
 - 0.7-0.85: Highly repetitive, predictable steps, strong automation candidate
 - 0.85-1.0: Almost entirely mechanical, minimal judgment, ideal for full automation
 
-Be specific in your observations. Reference actual UI elements, application names, and actions you can see in the screenshots. If you cannot identify an application, describe what you see (e.g., "spreadsheet application", "web-based form").
+For sop_step_count: Count the numbered top-level steps in Section A.
+For automation_candidate_count: Count the ranked candidates in Section B.
+For top_automation_candidate: Use the name/title of candidate #1 from Section B.
 
 Return ONLY the JSON object, no additional text."""
 
 
 # =============================================================================
-# Frame Loading
+# Video Upload
 # =============================================================================
 
 
-def _load_frames(frame_paths: list[str], max_frames: int = MAX_FRAMES_TO_ANALYZE) -> list[Image.Image]:
+def _upload_video(video_path: str, video_id: str = "") -> object:
     """
-    Load frame images for Gemini analysis.
-    If there are more frames than max_frames, sample evenly.
+    Upload a video file to Gemini File API and wait for processing.
+
+    Returns the processed file object.
+    Raises TimeoutError or RuntimeError on failure.
     """
-    if len(frame_paths) > max_frames:
-        # Evenly sample frames
-        step = len(frame_paths) / max_frames
-        indices = [int(i * step) for i in range(max_frames)]
-        frame_paths = [frame_paths[i] for i in indices]
+    client = _get_client()
 
-    images = []
-    for path in frame_paths:
-        try:
-            img = Image.open(path)
-            # Resize to reduce API token costs (keep aspect ratio)
-            # 768px ensures single tile = 258 tokens per image (not multiple tiles)
-            max_dim = 768
-            if img.width > max_dim or img.height > max_dim:
-                img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-            images.append(img)
-        except Exception as e:
-            print(f"[WARN] Could not load frame {Path(path).name}: {e}")
+    print(f"  Uploading video to Gemini File API...")
+    video_file = client.files.upload(file=video_path)
+    print(f"  Upload complete, waiting for processing...")
 
-    return images
+    elapsed = 0
+    while video_file.state.name == "PROCESSING":
+        if elapsed >= VIDEO_UPLOAD_TIMEOUT:
+            # Clean up the stuck file
+            try:
+                client.files.delete(name=video_file.name)
+            except Exception:
+                pass
+            raise TimeoutError(
+                f"Video processing timed out after {VIDEO_UPLOAD_TIMEOUT}s for {video_id}"
+            )
+        time.sleep(VIDEO_UPLOAD_POLL_INTERVAL)
+        elapsed += VIDEO_UPLOAD_POLL_INTERVAL
+        video_file = client.files.get(name=video_file.name)
+
+    if video_file.state.name == "FAILED":
+        raise RuntimeError(f"Video processing failed for {video_id}")
+
+    print(f"  Video processed successfully")
+    return video_file
 
 
 # =============================================================================
-# Analysis
+# Markdown Parsing
+# =============================================================================
+
+
+def _parse_markdown_response(markdown_text: str) -> dict:
+    """
+    Split the Gemini markdown response into sections A-E.
+
+    Returns dict with keys: sop, automation_candidates, automation_plan,
+    visual_plan, clarifying_questions, raw
+    """
+    sections = {
+        "sop": "",
+        "automation_candidates": "",
+        "automation_plan": "",
+        "visual_plan": "",
+        "clarifying_questions": "",
+        "raw": markdown_text,
+    }
+
+    section_map = {
+        "A": "sop",
+        "B": "automation_candidates",
+        "C": "automation_plan",
+        "D": "visual_plan",
+        "E": "clarifying_questions",
+    }
+
+    # Match section headers like "### A)", "## A)", "### A."
+    pattern = r'#{2,3}\s*([A-E])\s*\)'
+    matches = list(re.finditer(pattern, markdown_text))
+
+    for i, match in enumerate(matches):
+        letter = match.group(1)
+        key = section_map.get(letter)
+        if not key:
+            continue
+
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(markdown_text)
+        sections[key] = markdown_text[start:end].strip()
+
+    return sections
+
+
+# =============================================================================
+# Analysis (Two-Pass)
 # =============================================================================
 
 
 def analyze_video(
-    frame_paths: list[str],
+    video_path: str,
     task_description: str,
     video_id: str = "",
 ) -> Optional[dict]:
     """
-    Send frames to Gemini Vision API and get structured analysis.
+    Upload video to Gemini and perform two-pass analysis.
+
+    Pass 1: Rich markdown analysis (SOP, automation candidates, etc.)
+    Pass 2: Structured JSON extraction for ML pipelines.
 
     Args:
-        frame_paths: List of paths to extracted frame JPGs.
+        video_path: Path to the MP4 video file.
         task_description: The user's stated task from the filename.
         video_id: Identifier for logging.
 
     Returns:
-        Dict with: primary_app, app_sequence, detected_actions,
-                   friction_events, friction_count, automation_score,
-                   workflow_category.
+        Dict with:
+            "markdown": str -- full Pass 1 response
+            "sections": dict -- parsed A-E sections
+            "structured": dict -- Pass 2 JSON for CSV/ML
         None on failure.
     """
     _ensure_configured()
 
-    if not frame_paths:
-        print(f"[ERROR] No frames to analyze for video {video_id}")
+    if not os.path.isfile(video_path):
+        print(f"[ERROR] Video file not found: {video_path}")
         return None
 
-    # Load and prepare frames
-    images = _load_frames(frame_paths)
-    if not images:
-        print(f"[ERROR] Could not load any frames for video {video_id}")
-        return None
-
-    # Build the prompt
-    prompt = ANALYSIS_PROMPT.format(task_description=task_description)
-
-    # Build content: prompt + all images
-    content = [prompt] + images
-
-    # Get client
     client = _get_client()
+    video_file = None
 
-    # Add a small warmup delay before the first request to avoid burst limits
-    print(f"  Waiting {API_CALL_DELAY_SECONDS:.0f}s before API call (rate limit protection)...")
-    time.sleep(API_CALL_DELAY_SECONDS / 2)
+    try:
+        # --- Upload video ---
+        video_file = _upload_video(video_path, video_id)
 
-    # Call Gemini with retries
+        # --- Pass 1: Rich analysis ---
+        print(f"  Pass 1: Analyzing workflow (SOP + automation)...")
+        prompt = ANALYSIS_PROMPT.format(task_description=task_description)
+
+        markdown_text = _call_gemini(
+            client=client,
+            contents=[video_file, prompt],
+            video_id=video_id,
+            pass_name="Pass 1",
+            use_json=False,
+        )
+
+        if not markdown_text:
+            return None
+
+        sections = _parse_markdown_response(markdown_text)
+
+        # --- Pass 2: Structured extraction ---
+        print(f"  Pass 2: Extracting structured ML features...")
+        extraction_prompt = EXTRACTION_PROMPT.format(analysis_markdown=markdown_text)
+
+        json_text = _call_gemini(
+            client=client,
+            contents=[extraction_prompt],
+            video_id=video_id,
+            pass_name="Pass 2",
+            use_json=True,
+        )
+
+        structured = _parse_json_response(json_text, video_id) if json_text else _empty_structured()
+
+        return {
+            "markdown": markdown_text,
+            "sections": sections,
+            "structured": structured,
+        }
+
+    except (TimeoutError, RuntimeError) as e:
+        print(f"[ERROR] {e}")
+        return None
+
+    finally:
+        # Clean up uploaded file
+        if video_file:
+            try:
+                client.files.delete(name=video_file.name)
+            except Exception:
+                pass
+
+
+def _call_gemini(
+    client,
+    contents: list,
+    video_id: str,
+    pass_name: str,
+    use_json: bool,
+) -> Optional[str]:
+    """
+    Call Gemini with retry logic. Returns the response text or None.
+    """
+    config = types.GenerateContentConfig(
+        temperature=0.2,
+    )
+    if use_json:
+        config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.2,
+        )
+
     last_error = None
     for attempt in range(1, MAX_API_RETRIES + 1):
         try:
             response = client.models.generate_content(
                 model=GEMINI_MODEL,
-                contents=content,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.2,  # Low temp for consistent structured output
-                ),
+                contents=contents,
+                config=config,
             )
+            if response.text:
+                return response.text
 
-            # Parse JSON response
-            result = _parse_response(response.text, video_id)
-            if result:
-                return result
-
-            print(f"[WARN] Malformed response for {video_id}, attempt {attempt}/{MAX_API_RETRIES}")
+            print(f"[WARN] Empty response for {video_id} {pass_name}, attempt {attempt}/{MAX_API_RETRIES}")
 
         except Exception as e:
             last_error = e
             error_str = str(e).lower()
 
-            # Rate limit — back off exponentially with longer initial wait
             if "429" in str(e) or "resource_exhausted" in error_str or "quota" in error_str:
-                # Start with longer backoff and increase exponentially
                 wait = RATE_LIMIT_INITIAL_BACKOFF * (2 ** (attempt - 1))
-                print(f"[WARN] Rate limited on {video_id}, waiting {wait:.0f}s (attempt {attempt}/{MAX_API_RETRIES})")
+                print(f"[WARN] Rate limited on {video_id} {pass_name}, waiting {wait:.0f}s (attempt {attempt}/{MAX_API_RETRIES})")
                 time.sleep(wait)
                 continue
 
-            # Safety filter or blocked content
             if "safety" in error_str or "blocked" in error_str:
-                print(f"[WARN] Content blocked by safety filter for {video_id}: {e}")
+                print(f"[WARN] Content blocked by safety filter for {video_id} {pass_name}: {e}")
                 return None
 
-            # Other errors
-            print(f"[WARN] Gemini API error for {video_id} (attempt {attempt}/{MAX_API_RETRIES}): {e}")
+            print(f"[WARN] Gemini API error for {video_id} {pass_name} (attempt {attempt}/{MAX_API_RETRIES}): {e}")
             if attempt < MAX_API_RETRIES:
                 time.sleep(API_CALL_DELAY_SECONDS)
 
-    error_msg = str(last_error)
-    print(f"[ERROR] All {MAX_API_RETRIES} attempts failed for {video_id}: {last_error}")
-    
-    # If it's a quota/rate limit error, provide guidance
-    if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "quota" in error_msg.lower():
-        print(f"[TIP] Consider:")
-        print(f"      - Increase API_CALL_DELAY_SECONDS in config.py (currently {API_CALL_DELAY_SECONDS}s)")
-        print(f"      - Reduce FRAMES_PER_VIDEO in config.py to lower API load")
-        print(f"      - Process fewer videos at once with --limit flag")
-        print(f"      - Check your Gemini API quota at: https://aistudio.google.com/")
-    
+    print(f"[ERROR] All {MAX_API_RETRIES} attempts failed for {video_id} {pass_name}: {last_error}")
     return None
 
 
-def _parse_response(response_text: str, video_id: str) -> Optional[dict]:
-    """Parse and validate the Gemini JSON response."""
+# =============================================================================
+# JSON Parsing (Pass 2)
+# =============================================================================
+
+
+def _parse_json_response(response_text: str, video_id: str) -> dict:
+    """Parse and validate the Pass 2 structured JSON response."""
     try:
         data = json.loads(response_text)
     except json.JSONDecodeError:
-        # Try to extract JSON from markdown code block
-        import re
         match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
         if match:
             try:
                 data = json.loads(match.group(1))
             except json.JSONDecodeError:
-                print(f"[ERROR] Could not parse JSON from response for {video_id}")
-                return None
+                print(f"[ERROR] Could not parse JSON from Pass 2 response for {video_id}")
+                return _empty_structured()
         else:
-            print(f"[ERROR] Response is not valid JSON for {video_id}")
-            return None
+            print(f"[ERROR] Pass 2 response is not valid JSON for {video_id}")
+            return _empty_structured()
 
-    # Validate required fields
-    required = ["workflow_description", "primary_app", "app_sequence",
-                 "detected_actions", "friction_events", "automation_score",
-                 "workflow_category"]
-
-    for field in required:
-        if field not in data:
-            print(f"[WARN] Missing field '{field}' in response for {video_id}")
-            data.setdefault(field, _default_value(field))
-
-    # Normalize types
-    result = {
+    return {
         "workflow_description": str(data.get("workflow_description", "")),
         "primary_app": str(data.get("primary_app", "Unknown")),
         "app_sequence": _ensure_json_list(data.get("app_sequence", [])),
         "detected_actions": _ensure_json_list(data.get("detected_actions", [])),
-        "friction_events": _ensure_json_list(data.get("friction_events", [])),
         "automation_score": _clamp_float(data.get("automation_score", 0.0), 0.0, 1.0),
         "workflow_category": str(data.get("workflow_category", "other")),
+        "sop_step_count": _safe_int(data.get("sop_step_count", 0)),
+        "automation_candidate_count": _safe_int(data.get("automation_candidate_count", 0)),
+        "top_automation_candidate": str(data.get("top_automation_candidate", "")),
     }
 
-    # Derive friction_count
-    friction_list = data.get("friction_events", [])
-    result["friction_count"] = len(friction_list) if isinstance(friction_list, list) else 0
 
-    return result
-
-
-def _default_value(field: str):
-    """Return a sensible default for missing fields."""
-    defaults = {
+def _empty_structured() -> dict:
+    """Return empty structured data when analysis fails."""
+    return {
         "workflow_description": "",
         "primary_app": "Unknown",
-        "app_sequence": [],
-        "detected_actions": [],
-        "friction_events": [],
+        "app_sequence": "[]",
+        "detected_actions": "[]",
         "automation_score": 0.0,
         "workflow_category": "other",
+        "sop_step_count": 0,
+        "automation_candidate_count": 0,
+        "top_automation_candidate": "",
     }
-    return defaults.get(field, "")
 
 
 def _ensure_json_list(value) -> str:
@@ -295,7 +449,6 @@ def _ensure_json_list(value) -> str:
     if isinstance(value, list):
         return json.dumps(value)
     if isinstance(value, str):
-        # Already a JSON string?
         try:
             parsed = json.loads(value)
             if isinstance(parsed, list):
@@ -315,29 +468,37 @@ def _clamp_float(value, min_val: float, max_val: float) -> float:
         return 0.0
 
 
+def _safe_int(value) -> int:
+    """Safely convert to int."""
+    try:
+        return int(float(value))
+    except (ValueError, TypeError):
+        return 0
+
+
 if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 3:
-        print("Usage: python gemini_analyzer.py <frames_dir> <task_description>")
-        print("  frames_dir: Directory containing frame_*.jpg files")
+        print("Usage: python gemini_analyzer.py <video_path> <task_description>")
+        print("  video_path: Path to an MP4 video file")
         print("  task_description: The user's stated task")
         sys.exit(1)
 
-    frames_dir = sys.argv[1]
+    video = sys.argv[1]
     task = sys.argv[2]
 
-    frame_files = sorted(
-        [str(Path(frames_dir) / f) for f in os.listdir(frames_dir) if f.endswith(".jpg")]
-    )
-
-    print(f"Analyzing {len(frame_files)} frames...")
+    print(f"Analyzing video: {video}")
     print(f"Task: {task}")
 
-    import os  # noqa: F811
-    result = analyze_video(frame_files, task, "test")
+    result = analyze_video(video, task, "test")
     if result:
-        print("\nAnalysis Result:")
-        print(json.dumps(result, indent=2))
+        print("\n--- Pass 1: Markdown Analysis ---")
+        print(result["markdown"][:2000])
+        if len(result["markdown"]) > 2000:
+            print(f"\n... ({len(result['markdown'])} total characters)")
+
+        print("\n--- Pass 2: Structured Data ---")
+        print(json.dumps(result["structured"], indent=2))
     else:
         print("\nAnalysis failed.")
