@@ -15,7 +15,7 @@
 #   - ffmpeg installed (choco install ffmpeg)
 #   - Python 3.10+ with pipeline deps (pip install -r pipeline/requirements.txt)
 #   - Gemini API key configured in pipeline/.env
-#   - Network share \\bulley-fs1\workflow accessible to the RunAs account
+#   - Source directory configured via environment variable (WORKFLOW_SOURCE_SHARE)
 #
 # Usage:
 #   .\Schedule-WorkflowPipeline.ps1                          # Install daily at 02:00

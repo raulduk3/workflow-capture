@@ -98,7 +98,7 @@ def discover_videos(source_share: str, single_user: str = "") -> list[dict]:
     Walk the source share and parse all .webm filenames.
 
     Args:
-        source_share: Root path to the network share (e.g., \\\\bulley-fs1\\workflow)
+        source_share: Root path to the source directory (e.g., \\\\SERVER\\SHARE\\workflow or C:\\temp\\workflow)
         single_user: If set, only scan this user's subfolder.
 
     Returns:
@@ -197,11 +197,11 @@ def load_converted_sessions(csv_path: str, single_user: str = "") -> list[dict]:
 if __name__ == "__main__":
     # Quick test with sample filenames
     test_files = [
-        r"\\bulley-fs1\workflow\aalekic\2026-02-05_080501_AALEKIC-LWX1_Signing_off_on_credit_cards.webm",
-        r"\\bulley-fs1\workflow\cheras\2026-02-04_093044_RCRANE-LWX1_Culver_S&W_scope_of_work_within_the_workbook.webm",
-        r"\\bulley-fs1\workflow\rcrane\2026-02-05_100835_RCRANE-LWX1_Culver_S&W_RFI's,_email_and_plan_review.webm",
-        r"\\bulley-fs1\workflow\cheras\2026-02-04_082121_RCRANE-LWX1_No_description.webm",
-        r"\\bulley-fs1\workflow\efuentes\2026-02-09_074055_EFUENTES-LWX2_Payroll_processing.webm",
+        r"\\\\SERVER\\SHARE\\workflow\\johnsmith\\2026-02-05_080501_JOHN-DEVICE_Example_task_description.webm",
+        r"\\\\SERVER\\SHARE\\workflow\\janesmith\\2026-02-04_093044_JANE-DEVICE_Another_example_task.webm",
+        r"\\\\SERVER\\SHARE\\workflow\\mdoe\\2026-02-05_100835_MDOE-DEVICE_Example_workflow_task.webm",
+        r"\\\\SERVER\\SHARE\\workflow\\asmith\\2026-02-04_082121_ASMITH-DEVICE_Task_example.webm",
+        r"\\\\SERVER\\SHARE\\workflow\\rjones\\2026-02-09_074055_RJONES-DEVICE_Workflow_example.webm",
     ]
 
     for f in test_files:

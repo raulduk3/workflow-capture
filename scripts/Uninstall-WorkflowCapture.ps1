@@ -1,5 +1,5 @@
 # =============================================================================
-# L7S Workflow Capture - Silent Uninstallation Script for Ninja RMM
+# L7S Workflow Capture - Silent Uninstallation Script
 # =============================================================================
 # This script silently uninstalls the Workflow Capture application
 # from Windows client machines.

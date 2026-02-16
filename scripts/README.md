@@ -1,4 +1,4 @@
-# L7S Workflow Capture - Ninja RMM Scripts
+# L7S Workflow Capture - Deployment Scripts
 
 PowerShell scripts for deploying and managing L7S Workflow Capture via Ninja RMM.
 
@@ -28,7 +28,7 @@ The pipeline converts `.webm` recordings from the network share to `.mp4`, then 
   ┌──────────────┐                 ┌──────────────────────────────────┐
   │ Client PCs   │    .webm        │ Schedule-WorkflowPipeline.ps1    │
   │ Extract      │──────────►      │  └─► Run-WorkflowPipeline.ps1   │
-  │ .webm to     │  \\bulley-fs1   │       ├─ Stage 1: webm → mp4    │
+  │ .webm to     │  Network/Local │       ├─ Stage 1: webm → mp4    │
   │ network share│  \workflow\     │       └─ Stage 2: Gemini → CSV  │
   └──────────────┘                 └──────────────────────────────────┘
 ```
@@ -371,7 +371,7 @@ If you prefer to control the installer version:
 1. **Schedule Extraction** (Client Machines)
    - Run daily via Ninja RMM
    - Script: `Extract-WorkflowCaptures.ps1`
-   - Uploads `.webm` to `\\bulley-fs1\workflow\{user}\`
+   - Uploads `.webm` to configured destination (network share or local path)
 
 2. **Schedule Analysis Pipeline** (Utility Server)
    - Run once on the utility server to register the task:

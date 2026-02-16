@@ -1,5 +1,5 @@
 # =============================================================================
-# L7S Workflow Analysis - Full Pipeline Runner
+# Workflow Analysis - Full Pipeline Runner
 # =============================================================================
 # Wrapper script for Windows Task Scheduler or manual execution.
 # Runs both stages of the pipeline in sequence:
@@ -10,14 +10,14 @@
 #   - ffmpeg installed via Chocolatey (choco install ffmpeg)
 #   - Python 3.10+ with pipeline dependencies (pip install -r pipeline/requirements.txt)
 #   - Gemini API key configured in pipeline/.env
-#   - Network share \\bulley-fs1\workflow accessible
+#   - Source directory with workflow recordings accessible
 #
 # Usage:
 #   .\Run-WorkflowPipeline.ps1                      # Full pipeline
 #   .\Run-WorkflowPipeline.ps1 -SkipConversion       # Skip MP4 conversion
 #   .\Run-WorkflowPipeline.ps1 -MetadataOnly         # Skip Gemini analysis
 #   .\Run-WorkflowPipeline.ps1 -GenerateReport       # Include insights report
-#   .\Run-WorkflowPipeline.ps1 -User "rcrane"        # Single user
+#   .\.\Run-WorkflowPipeline.ps1 -User "username"      # Single user
 # =============================================================================
 
 param(
@@ -91,17 +91,17 @@ Write-Log "=========================================="
 $overallSuccess = $true
 
 # =============================================================================
-# Pre-flight: Validate network share connectivity
+# Pre-flight: Validate source directory connectivity
 # =============================================================================
 
-$sourceShare = "\\bulley-fs1\workflow"
+$sourceShare = [Environment]::GetEnvironmentVariable("WORKFLOW_SOURCE_SHARE") ?? "\\\\SERVER\\SHARE\\workflow"
 $shareRetries = 3
 $shareAvailable = $false
 
 for ($i = 0; $i -lt $shareRetries; $i++) {
     if (Test-Path $sourceShare) {
         $shareAvailable = $true
-        Write-Log "Network share accessible: $sourceShare"
+        Write-Log "Source directory accessible: $sourceShare"
         break
     }
     if ($i -lt ($shareRetries - 1)) {

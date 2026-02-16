@@ -1,14 +1,14 @@
 # =============================================================================
-# L7S Workflow Capture - Data Extraction Script for Ninja RMM
+# Workflow Capture - Data Extraction Script
 # =============================================================================
 # This script collects all workflow capture recordings from the machine
-# and copies them to a designated network share.
+# and copies them to a designated destination (network share or local).
 #
-# Designed to be deployed via Ninja RMM for silent background extraction
-# Runs 2-3 times per day - archives local recordings after upload (not deleted)
+# Designed to be deployed via endpoint management (RMM, SCCM, etc.)
+# Can be scheduled to run 2-3 times per day
 #
 # IMPORTANT: Must run as the logged-in user (not SYSTEM) to access network share
-# In Ninja RMM: Set "Run As" to "Logged-in User" or "Current User"
+# In RMM/SCCM: Set to run as "Logged-in User" or "Current User"
 #
 # Data Structure (Local):
 #   C:\temp\L7SWorkflowCapture\Sessions\
@@ -18,15 +18,15 @@
 #   C:\temp\L7SWorkflowCapture\Archive\
 #   └── recordings_YYYY-MM-DD_HHMMSS_machineName.zip
 #
-# Data Structure (Network Destination):
-#   \\server\share\
+# Data Structure (Destination - Network or Local):
+#   {DestinationPath}\
 #   └── {USERNAME}\                    (User-specific folder)
 #       └── YYYY-MM-DD_HHMMSS_machineName_taskDescription.webm
 # =============================================================================
 
 param(
     [Parameter(Mandatory=$false)]
-    [string]$DestinationPath = "\\bulley-fs1\workflow",
+    [string]$DestinationPath = [Environment]::GetEnvironmentVariable("WORKFLOW_DESTINATION") ?? "\\\\SERVER\\SHARE\\workflow",
     
     [Parameter(Mandatory=$false)]
     [switch]$VerboseOutput = $false

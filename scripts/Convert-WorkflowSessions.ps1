@@ -1,25 +1,25 @@
 # =============================================================================
-# L7S Workflow Capture - Video Conversion & Session Data Extraction
+# Workflow Capture - Video Conversion & Session Data Extraction
 # =============================================================================
-# Converts .webm workflow recordings from the network share to .mp4 format
+# Converts .webm workflow recordings from source directory to .mp4 format
 # and builds a cumulative CSV of all session metadata.
 #
-# Runs on the utility server with ffmpeg installed via Chocolatey.
+# Runs with ffmpeg installed via Chocolatey.
 # Designed to be idempotent - skips files already converted.
 #
 # Source:
-#   \\bulley-fs1\workflow\{USERNAME}\
+#   {SourceShare}\{USERNAME}\
 #   └── YYYY-MM-DD_HHMMSS_machineName_taskDescription.webm
 #
 # Output:
-#   C:\temp\WorkflowProcessing\
+#   {OutputRoot}\
 #   ├── {username}_YYYY-MM-DD_HHMMSS_machineName_taskDescription.mp4
 #   └── workflow_sessions.csv
 # =============================================================================
 
 param(
     [Parameter(Mandatory=$false)]
-    [string]$SourceShare = "\\bulley-fs1\workflow",
+    [string]$SourceShare = [Environment]::GetEnvironmentVariable("WORKFLOW_SOURCE_SHARE") ?? "\\\\SERVER\\SHARE\\workflow",
 
     [Parameter(Mandatory=$false)]
     [string]$OutputRoot = "C:\temp\WorkflowProcessing",

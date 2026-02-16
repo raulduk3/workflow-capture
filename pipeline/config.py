@@ -1,5 +1,5 @@
 """
-L7S Workflow Analysis Pipeline - Configuration
+Workflow Analysis Pipeline - Configuration
 All paths, constants, and environment variables centralized here.
 """
 
@@ -15,13 +15,14 @@ load_dotenv(_pipeline_dir / ".env", override=True)
 # Paths
 # =============================================================================
 
-# Network share where .webm files are collected by Ninja RMM extraction script
-SOURCE_SHARE = r"\\bulley-fs1\workflow"
+# Source directory where .webm files are collected (network share or local)
+# Configure via WORKFLOW_SOURCE_SHARE environment variable or set below
+SOURCE_SHARE = os.environ.get("WORKFLOW_SOURCE_SHARE", r"\\SERVER\SHARE\workflow")
 
-# Local directory on utility server where MP4s are written by Convert-WorkflowSessions.ps1
+# Local directory where MP4s are written by video conversion process
 MP4_DIR = r"C:\temp\WorkflowProcessing"
 
-# Conversion CSV produced by Convert-WorkflowSessions.ps1
+# Conversion CSV produced by conversion script
 CONVERSION_CSV = os.path.join(MP4_DIR, "workflow_sessions.csv")
 
 # Output directory for analysis results
