@@ -200,7 +200,10 @@ def _upload_video(video_path: str, video_id: str = "") -> object:
 
     print(f"  Uploading video to Gemini File API... ({mime_type})")
     try:
-        video_file = client.files.upload(file=video_path, mime_type=mime_type)
+        try:
+            video_file = client.files.upload(file=video_path, mime_type=mime_type)
+        except TypeError:
+            video_file = client.files.upload(file=video_path)
     except Exception as e:
         if "invalid_argument" in str(e).lower():
             raise RuntimeError(
