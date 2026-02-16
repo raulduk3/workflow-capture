@@ -1,28 +1,27 @@
 """
 L7S Workflow Analysis Pipeline - Insights Report Generator
 
-Reads the analysis CSV and produces the Day 7 deliverable report as markdown.
-Report sections per VIDEO_TO_INSIGHTS_PIPELINE.md section 8.1:
+Reads the analysis CSV and per-video markdown files to produce an aggregate
+insights report. Report sections:
   1. Volume Summary
-  2. Complete Workflow Inventory
-  3. Top Friction Points
-  4. Automation Opportunities
+  2. Workflow Inventory
+  3. Automation Landscape
+  4. SOP Complexity Overview
   5. Application Insights
   6. User-Specific Findings
-  7. Gemini Integration Recommendations
+  7. Detailed Analysis Links
+  8. Cross-Video Automation Themes
 """
 
-import csv
 import json
 import os
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
 
 from config import ANALYSIS_CSV, REPORTS_DIR
-from pattern_detector import PATTERNS, get_pattern_details
+from gemini_analyzer import _parse_markdown_response
 
 
 def generate_report(
@@ -35,7 +34,6 @@ def generate_report(
     Returns:
         Path to the generated report file.
     """
-    # Load data
     if not os.path.isfile(csv_path):
         print(f"[ERROR] Analysis CSV not found: {csv_path}")
         return ""
@@ -46,28 +44,25 @@ def generate_report(
         print("[WARN] Analysis CSV is empty. No report to generate.")
         return ""
 
-    # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
 
-    # Generate report filename
     date_str = datetime.now().strftime("%Y-%m-%d")
     report_path = os.path.join(output_dir, f"insights_{date_str}.md")
 
-    # Build report sections
     sections = []
     sections.append(_header(df))
     sections.append(_volume_summary(df))
     sections.append(_workflow_inventory(df))
-    sections.append(_top_friction_points(df))
-    sections.append(_automation_opportunities(df))
+    sections.append(_automation_landscape(df))
+    sections.append(_sop_complexity(df))
     sections.append(_application_insights(df))
     sections.append(_user_findings(df))
-    sections.append(_gemini_recommendations(df))
+    sections.append(_analysis_links(df))
+    sections.append(_cross_video_themes(df))
     sections.append(_footer())
 
     report_content = "\n\n".join(sections)
 
-    # Write report
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(report_content)
 
@@ -96,7 +91,6 @@ def _volume_summary(df: pd.DataFrame) -> str:
     unique_users = df["username"].nunique() if "username" in df.columns else 0
     unique_machines = df["machine_id"].nunique() if "machine_id" in df.columns else 0
 
-    # Total recording hours
     if "duration_sec" in df.columns:
         valid_durations = df["duration_sec"][df["duration_sec"] > 0]
         total_seconds = valid_durations.sum()
@@ -106,7 +100,6 @@ def _volume_summary(df: pd.DataFrame) -> str:
         total_hours = 0
         avg_duration_min = 0
 
-    # Date range
     if "timestamp" in df.columns:
         earliest = df["timestamp"].min()
         latest = df["timestamp"].max()
@@ -114,15 +107,13 @@ def _volume_summary(df: pd.DataFrame) -> str:
     else:
         date_range = "Unknown"
 
-    # User list
+    user_lines = ""
     if "username" in df.columns:
         user_counts = df["username"].value_counts()
         user_lines = "\n".join(
             f"| {user} | {count} | {count/total_videos*100:.0f}% |"
             for user, count in user_counts.items()
         )
-    else:
-        user_lines = ""
 
     return f"""## 1. Volume Summary
 
@@ -143,133 +134,56 @@ def _volume_summary(df: pd.DataFrame) -> str:
 
 
 def _workflow_inventory(df: pd.DataFrame) -> str:
-    """Complete table of all analyzed workflows."""
-    lines = ["## 2. Complete Workflow Inventory"]
+    lines = ["## 2. Workflow Inventory"]
     lines.append(f"\n**Total workflows analyzed:** {len(df)}")
-    lines.append("\n| User | Task | Duration | App | Score | Friction | Category | Description |")
-    lines.append("|------|------|----------|-----|-------|----------|----------|-------------|")
-    
+    lines.append("\n| User | Task | Duration | App | Score | SOP Steps | Top Candidate | Summary |")
+    lines.append("|------|------|----------|-----|-------|-----------|---------------|---------|")
+
     for _, row in df.iterrows():
         user = row.get("username", "")
         task = _truncate(row.get("task_description", ""), 30)
         duration = f"{_safe_float(row.get('duration_sec', 0))/60:.1f}m" if _safe_float(row.get('duration_sec', 0)) > 0 else "-"
         app = _truncate(row.get("primary_app", ""), 15)
         score = f"{_safe_float(row.get('automation_score', 0)):.2f}"
-        friction = str(_safe_int(row.get("friction_count", 0)))
-        category = row.get("workflow_category", "")
-        description = _truncate(row.get("workflow_description", ""), 50)
-        
-        lines.append(f"| {user} | {task} | {duration} | {app} | {score} | {friction} | {category} | {description} |")
-    
-    return "\n".join(lines)
+        sop = str(_safe_int(row.get("sop_step_count", 0)))
+        candidate = _truncate(row.get("top_automation_candidate", ""), 25)
+        summary = _truncate(row.get("workflow_description", ""), 40)
 
-
-def _top_friction_points(df: pd.DataFrame) -> str:
-    lines = ["## 3. Top Friction Points (Priority)"]
-
-    # Videos with highest friction counts
-    if "friction_count" not in df.columns:
-        lines.append("\n*No friction data available — Gemini analysis may not have run.*")
-        return "\n".join(lines)
-
-    df_friction = df[df["friction_count"].apply(_safe_int) > 0].copy()
-    df_friction["friction_count_int"] = df_friction["friction_count"].apply(_safe_int)
-
-    if df_friction.empty:
-        lines.append("\n*No friction events detected across analyzed videos.*")
-        return "\n".join(lines)
-
-    total_friction = df_friction["friction_count_int"].sum()
-    avg_friction = df["friction_count"].apply(_safe_int).mean()
-
-    lines.append(f"\n**Total friction events detected:** {total_friction}")
-    lines.append(f"**Average friction events per video:** {avg_friction:.1f}")
-
-    # Top friction videos
-    top_friction = df_friction.nlargest(10, "friction_count_int")
-    lines.append("\n### Highest-Friction Workflows\n")
-    lines.append("| User | Task | Friction Events | App | Score |")
-    lines.append("|------|------|-----------------|-----|-------|")
-
-    for _, row in top_friction.iterrows():
-        lines.append(
-            f"| {row.get('username', '')} "
-            f"| {_truncate(row.get('task_description', ''), 40)} "
-            f"| {_safe_int(row.get('friction_count', 0))} "
-            f"| {row.get('primary_app', '')} "
-            f"| {_safe_float(row.get('automation_score', 0)):.2f} |"
-        )
-
-    # Friction by user
-    if "username" in df.columns:
-        user_friction = df.groupby("username")["friction_count"].apply(
-            lambda x: x.apply(_safe_int).sum()
-        ).sort_values(ascending=False)
-
-        lines.append("\n### Friction by User\n")
-        lines.append("| User | Total Friction Events | Avg per Video |")
-        lines.append("|------|----------------------|---------------|")
-        for user, total in user_friction.items():
-            count = len(df[df["username"] == user])
-            avg = total / count if count > 0 else 0
-            lines.append(f"| {user} | {total} | {avg:.1f} |")
-
-    # Common friction event descriptions
-    all_friction = []
-    if "friction_events" in df.columns:
-        for events_str in df["friction_events"].dropna():
-            parsed = _parse_json_field(events_str)
-            all_friction.extend(parsed)
-
-    if all_friction:
-        friction_counts = Counter(all_friction).most_common(10)
-        lines.append("\n### Most Common Friction Events\n")
-        lines.append("| Friction Event | Occurrences |")
-        lines.append("|----------------|-------------|")
-        for event, count in friction_counts:
-            lines.append(f"| {_truncate(event, 60)} | {count} |")
+        lines.append(f"| {user} | {task} | {duration} | {app} | {score} | {sop} | {candidate} | {summary} |")
 
     return "\n".join(lines)
 
 
-def _automation_opportunities(df: pd.DataFrame) -> str:
-    lines = ["## 3. Automation Opportunities"]
+def _automation_landscape(df: pd.DataFrame) -> str:
+    lines = ["## 3. Automation Landscape"]
 
     if "automation_score" not in df.columns:
-        lines.append("\n*No automation score data — Gemini analysis may not have run.*")
+        lines.append("\n*No automation data available.*")
         return "\n".join(lines)
 
     df_scored = df.copy()
     df_scored["score_float"] = df_scored["automation_score"].apply(_safe_float)
 
-    # Pattern flag summary
-    if "pattern_flags" in df.columns:
-        flag_values = df["pattern_flags"].dropna().tolist()
-        all_flags = []
-        for f in flag_values:
-            if f:
-                all_flags.extend(f.split(","))
+    # Top automation candidates across all videos
+    if "top_automation_candidate" in df.columns:
+        candidates = df["top_automation_candidate"].dropna().tolist()
+        candidates = [c for c in candidates if c and c != ""]
+        if candidates:
+            candidate_counts = Counter(candidates)
+            lines.append("\n### Most Common Automation Candidates\n")
+            lines.append("| Automation Candidate | Appearances | Avg Score |")
+            lines.append("|---------------------|-------------|-----------|")
+            for candidate, count in candidate_counts.most_common(10):
+                matching = df_scored[df_scored["top_automation_candidate"] == candidate]
+                avg_score = matching["score_float"].mean()
+                lines.append(f"| {_truncate(candidate, 50)} | {count} | {avg_score:.2f} |")
 
-        flag_counts = Counter(all_flags)
-        if flag_counts:
-            lines.append("\n### Pattern Summary\n")
-            lines.append("| Pattern | Videos Flagged | Description |")
-            lines.append("|---------|---------------|-------------|")
-            for key, count in flag_counts.most_common():
-                key = key.strip()
-                info = PATTERNS.get(key, {})
-                label = info.get("label", key)
-                emoji = info.get("emoji", "")
-                desc = info.get("action", "")
-                lines.append(f"| {emoji} {label} | {count} | {desc} |")
-
-    # Top automation candidates
+    # Top scoring workflows
     auto_ready = df_scored[df_scored["score_float"] >= 0.7].sort_values("score_float", ascending=False)
-
     if auto_ready.empty:
         lines.append("\n*No workflows scored 0.7+ for automation potential.*")
     else:
-        lines.append(f"\n### Top Automation Candidates ({len(auto_ready)} workflows scoring ≥ 0.7)\n")
+        lines.append(f"\n### Top Automation Candidates ({len(auto_ready)} workflows scoring >= 0.7)\n")
         lines.append("| User | Task | Score | App | Category |")
         lines.append("|------|------|-------|-----|----------|")
         for _, row in auto_ready.head(15).iterrows():
@@ -281,7 +195,7 @@ def _automation_opportunities(df: pd.DataFrame) -> str:
                 f"| {row.get('workflow_category', '')} |"
             )
 
-    # Automation score distribution
+    # Score distribution
     bins = [(0, 0.3, "Low"), (0.3, 0.5, "Moderate"), (0.5, 0.7, "Medium"), (0.7, 0.85, "High"), (0.85, 1.01, "Very High")]
     lines.append("\n### Automation Score Distribution\n")
     lines.append("| Range | Level | Videos | % |")
@@ -291,6 +205,59 @@ def _automation_opportunities(df: pd.DataFrame) -> str:
         count = len(df_scored[(df_scored["score_float"] >= low) & (df_scored["score_float"] < high)])
         pct = count / total * 100 if total > 0 else 0
         lines.append(f"| {low:.1f}–{high:.2f} | {label} | {count} | {pct:.0f}% |")
+
+    return "\n".join(lines)
+
+
+def _sop_complexity(df: pd.DataFrame) -> str:
+    lines = ["## 4. SOP Complexity Overview"]
+
+    if "sop_step_count" not in df.columns:
+        lines.append("\n*No SOP data available.*")
+        return "\n".join(lines)
+
+    df_sop = df.copy()
+    df_sop["steps"] = df_sop["sop_step_count"].apply(_safe_int)
+    valid = df_sop[df_sop["steps"] > 0]
+
+    if valid.empty:
+        lines.append("\n*No SOP step data available.*")
+        return "\n".join(lines)
+
+    avg_steps = valid["steps"].mean()
+    max_steps = valid["steps"].max()
+    min_steps = valid["steps"].min()
+
+    lines.append(f"\n| Metric | Value |")
+    lines.append(f"|--------|-------|")
+    lines.append(f"| Average SOP steps | {avg_steps:.1f} |")
+    lines.append(f"| Most complex (max steps) | {max_steps} |")
+    lines.append(f"| Simplest (min steps) | {min_steps} |")
+
+    # Most complex workflows
+    top_complex = valid.nlargest(10, "steps")
+    lines.append("\n### Most Complex Workflows\n")
+    lines.append("| User | Task | SOP Steps | Auto Score | App |")
+    lines.append("|------|------|-----------|------------|-----|")
+    for _, row in top_complex.iterrows():
+        lines.append(
+            f"| {row.get('username', '')} "
+            f"| {_truncate(row.get('task_description', ''), 40)} "
+            f"| {row['steps']} "
+            f"| {_safe_float(row.get('automation_score', 0)):.2f} "
+            f"| {row.get('primary_app', '')} |"
+        )
+
+    # Step count distribution
+    bins_steps = [(1, 5, "Simple (1-5)"), (6, 10, "Moderate (6-10)"), (11, 20, "Complex (11-20)"), (21, 999, "Very Complex (21+)")]
+    lines.append("\n### Complexity Distribution\n")
+    lines.append("| Range | Videos | % |")
+    lines.append("|-------|--------|---|")
+    total = len(valid)
+    for low, high, label in bins_steps:
+        count = len(valid[(valid["steps"] >= low) & (valid["steps"] <= high)])
+        pct = count / total * 100 if total > 0 else 0
+        lines.append(f"| {label} | {count} | {pct:.0f}% |")
 
     return "\n".join(lines)
 
@@ -311,32 +278,32 @@ def _application_insights(df: pd.DataFrame) -> str:
     for app, count in app_counts.head(15).items():
         lines.append(f"| {app} | {count} | {count/total*100:.0f}% |")
 
-    # Apps by friction
-    if "friction_count" in df.columns:
-        app_friction = df.groupby("primary_app")["friction_count"].apply(
-            lambda x: x.apply(_safe_int).mean()
+    # Apps by automation score
+    if "automation_score" in df.columns:
+        app_scores = df.groupby("primary_app")["automation_score"].apply(
+            lambda x: x.apply(_safe_float).mean()
         ).sort_values(ascending=False)
 
-        lines.append("\n### Applications by Average Friction\n")
-        lines.append("| Application | Avg Friction Events | Videos |")
-        lines.append("|-------------|--------------------:|--------|")
-        for app, avg_f in app_friction.head(10).items():
+        lines.append("\n### Applications by Average Automation Score\n")
+        lines.append("| Application | Avg Score | Videos |")
+        lines.append("|-------------|-----------|--------|")
+        for app, avg_s in app_scores.head(10).items():
             count = len(df[df["primary_app"] == app])
-            lines.append(f"| {app} | {avg_f:.1f} | {count} |")
+            lines.append(f"| {app} | {avg_s:.2f} | {count} |")
 
-    # Co-occurring apps (from app_sequence)
+    # Co-occurring apps
     if "app_sequence" in df.columns:
         app_pairs = Counter()
         for seq_str in df["app_sequence"].dropna():
             apps = _parse_json_field(seq_str)
-            unique_apps = list(dict.fromkeys(apps))  # preserve order, remove dups
+            unique_apps = list(dict.fromkeys(apps))
             for i in range(len(unique_apps)):
                 for j in range(i + 1, len(unique_apps)):
                     pair = tuple(sorted([unique_apps[i], unique_apps[j]]))
                     app_pairs[pair] += 1
 
         if app_pairs:
-            lines.append("\n### Frequently Co-Occurring Applications (Integration Candidates)\n")
+            lines.append("\n### Frequently Co-Occurring Applications\n")
             lines.append("| App 1 | App 2 | Videos Together |")
             lines.append("|-------|-------|-----------------|")
             for (a, b), count in app_pairs.most_common(10):
@@ -352,28 +319,27 @@ def _user_findings(df: pd.DataFrame) -> str:
         lines.append("\n*No user data available.*")
         return "\n".join(lines)
 
-    has_friction = "friction_count" in df.columns
     has_score = "automation_score" in df.columns
+    has_sop = "sop_step_count" in df.columns
 
-    if not has_friction and not has_score:
+    if not has_score and not has_sop:
         lines.append("\n*No analysis data available for user comparison.*")
         return "\n".join(lines)
 
-    # Per-user summary
     lines.append("\n### User Overview\n")
     header = "| User | Videos | "
-    if has_friction:
-        header += "Avg Friction | "
     if has_score:
         header += "Avg Auto Score | "
+    if has_sop:
+        header += "Avg SOP Steps | "
     header += "Top App |"
     lines.append(header)
 
     sep = "|------|--------|"
-    if has_friction:
-        sep += "-------------|"
     if has_score:
         sep += "---------------|"
+    if has_sop:
+        sep += "--------------|"
     sep += "---------|"
     lines.append(sep)
 
@@ -383,106 +349,102 @@ def _user_findings(df: pd.DataFrame) -> str:
         top_app = user_df["primary_app"].mode().iloc[0] if "primary_app" in user_df.columns and not user_df["primary_app"].dropna().empty else ""
 
         row_str = f"| {user} | {count} | "
-        if has_friction:
-            avg_f = user_df["friction_count"].apply(_safe_int).mean()
-            row_str += f"{avg_f:.1f} | "
         if has_score:
             avg_s = user_df["automation_score"].apply(_safe_float).mean()
             row_str += f"{avg_s:.2f} | "
+        if has_sop:
+            avg_steps = user_df["sop_step_count"].apply(_safe_int).mean()
+            row_str += f"{avg_steps:.1f} | "
         row_str += f"{top_app} |"
         lines.append(row_str)
-
-    # Highest friction users (may need training)
-    if has_friction:
-        user_total_friction = df.groupby("username")["friction_count"].apply(
-            lambda x: x.apply(_safe_int).sum()
-        ).sort_values(ascending=False)
-
-        if user_total_friction.iloc[0] > 0:
-            lines.append("\n### Users with Highest Total Friction (May Need Support/Training)")
-            lines.append("")
-            for user, total in user_total_friction.head(5).items():
-                if total == 0:
-                    break
-                lines.append(f"- **{user}**: {total} total friction events")
-
-    # Smoothest workflows (best practices)
-    if has_friction:
-        user_avg_friction = df.groupby("username")["friction_count"].apply(
-            lambda x: x.apply(_safe_int).mean()
-        ).sort_values()
-
-        lines.append("\n### Users with Smoothest Workflows (Possible Best Practices)")
-        lines.append("")
-        for user, avg in user_avg_friction.head(3).items():
-            lines.append(f"- **{user}**: {avg:.1f} avg friction events per recording")
 
     return "\n".join(lines)
 
 
-def _gemini_recommendations(df: pd.DataFrame) -> str:
-    lines = ["## 7. Gemini Integration Recommendations"]
+def _analysis_links(df: pd.DataFrame) -> str:
+    lines = ["## 7. Detailed Analysis Files"]
 
-    has_analysis = "automation_score" in df.columns and df["automation_score"].apply(_safe_float).sum() > 0
-
-    if not has_analysis:
-        lines.append("\n*Gemini analysis has not been run yet. Recommendations will be available after processing.*")
-        lines.append("\nTo run analysis: `python run_pipeline.py`")
+    if "analysis_md_path" not in df.columns:
+        lines.append("\n*No per-video analysis files available.*")
         return "\n".join(lines)
 
-    # Find specific opportunities
-    df_copy = df.copy()
-    df_copy["score_float"] = df_copy["automation_score"].apply(_safe_float)
+    analyses = df[df["analysis_md_path"].notna() & (df["analysis_md_path"] != "")]
 
-    # Group by task description similarity (exact match for now)
-    task_groups = df_copy.groupby("task_description").agg(
-        count=("video_id", "count"),
-        avg_score=("score_float", "mean"),
-        avg_friction=("friction_count", lambda x: x.apply(_safe_int).mean()),
-        users=("username", lambda x: ", ".join(x.unique())),
-        primary_app=("primary_app", lambda x: x.mode().iloc[0] if not x.dropna().empty else ""),
-    ).sort_values("avg_score", ascending=False)
-
-    # Filter to high-value opportunities
-    opportunities = task_groups[
-        (task_groups["avg_score"] >= 0.5) & (task_groups["count"] >= 1)
-    ]
-
-    if opportunities.empty:
-        lines.append("\n*No high-confidence recommendations yet. More data needed.*")
+    if analyses.empty:
+        lines.append("\n*No per-video analysis files found.*")
         return "\n".join(lines)
 
-    lines.append("\n### Recommended Gemini AI Integrations\n")
+    lines.append(f"\n**{len(analyses)}** videos have detailed markdown analyses.\n")
+    lines.append("| User | Task | Score | Analysis File |")
+    lines.append("|------|------|-------|---------------|")
 
-    for i, (task, row) in enumerate(opportunities.head(10).iterrows(), 1):
-        lines.append(f"#### {i}. {task}")
+    for _, row in analyses.iterrows():
+        user = row.get("username", "")
+        task = _truncate(row.get("task_description", ""), 35)
+        score = f"{_safe_float(row.get('automation_score', 0)):.2f}"
+        md_path = row.get("analysis_md_path", "")
+        filename = os.path.basename(md_path) if md_path else ""
+        lines.append(f"| {user} | {task} | {score} | {filename} |")
+
+    return "\n".join(lines)
+
+
+def _cross_video_themes(df: pd.DataFrame) -> str:
+    lines = ["## 8. Cross-Video Automation Themes"]
+
+    if "analysis_md_path" not in df.columns:
+        lines.append("\n*No per-video analyses available for theme extraction.*")
+        return "\n".join(lines)
+
+    analyses = df[df["analysis_md_path"].notna() & (df["analysis_md_path"] != "")]
+
+    if analyses.empty:
+        lines.append("\n*No analysis files to extract themes from.*")
+        return "\n".join(lines)
+
+    # Read each markdown file and extract Section B (automation candidates)
+    all_candidates = []
+    for _, row in analyses.iterrows():
+        md_path = row.get("analysis_md_path", "")
+        if not md_path or not os.path.isfile(md_path):
+            continue
+
+        try:
+            with open(md_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            # Skip YAML front matter
+            if content.startswith("---"):
+                end_idx = content.find("---", 3)
+                if end_idx > 0:
+                    content = content[end_idx + 3:]
+
+            sections = _parse_markdown_response(content)
+            candidates_text = sections.get("automation_candidates", "")
+            if candidates_text:
+                all_candidates.append({
+                    "username": row.get("username", ""),
+                    "task": row.get("task_description", ""),
+                    "candidates": candidates_text,
+                })
+        except OSError:
+            continue
+
+    if not all_candidates:
+        lines.append("\n*Could not read analysis files for theme extraction.*")
+        return "\n".join(lines)
+
+    lines.append(f"\nExtracted automation candidates from **{len(all_candidates)}** analyses.\n")
+
+    # Show per-video candidate summaries
+    for entry in all_candidates:
+        lines.append(f"### {entry['username']} — {_truncate(entry['task'], 50)}\n")
+        # Show first ~500 chars of candidates section
+        preview = entry["candidates"][:500]
+        if len(entry["candidates"]) > 500:
+            preview += "\n\n*(truncated)*"
+        lines.append(preview)
         lines.append("")
-        lines.append(f"- **Frequency:** {row['count']} recording(s)")
-        lines.append(f"- **Users:** {row['users']}")
-        lines.append(f"- **Primary App:** {row['primary_app']}")
-        lines.append(f"- **Automation Score:** {row['avg_score']:.2f}")
-        lines.append(f"- **Avg Friction:** {row['avg_friction']:.1f} events")
-
-        # Suggest based on score range
-        score = row["avg_score"]
-        if score >= 0.85:
-            lines.append(f"- **Recommendation:** Full automation candidate — build Gemini workflow to handle end-to-end")
-        elif score >= 0.7:
-            lines.append(f"- **Recommendation:** Strong AI assist — Gemini can handle repetitive steps, human reviews output")
-        elif score >= 0.5:
-            lines.append(f"- **Recommendation:** Partial automation — Gemini can pre-populate fields, suggest actions, or summarize inputs")
-
-        lines.append("")
-
-    # Summary recommendation
-    total_high = len(df_copy[df_copy["score_float"] >= 0.7])
-    total_medium = len(df_copy[(df_copy["score_float"] >= 0.5) & (df_copy["score_float"] < 0.7)])
-
-    lines.append("### Summary")
-    lines.append("")
-    lines.append(f"- **{total_high}** workflows are strong automation candidates (score ≥ 0.7)")
-    lines.append(f"- **{total_medium}** workflows could benefit from partial AI assistance (score 0.5–0.7)")
-    lines.append(f"- Focus AI deployment on high-frequency, high-score tasks for maximum ROI")
 
     return "\n".join(lines)
 
@@ -491,7 +453,7 @@ def _footer() -> str:
     return f"""---
 
 *Report generated by L7S Workflow Analysis Pipeline on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*
-*Data source: Gemini Vision analysis of screen recordings collected via L7S Workflow Capture*
+*Data source: Gemini whole-video analysis of screen recordings collected via L7S Workflow Capture*
 *Layer 7 Systems — ML Engineering*"""
 
 
