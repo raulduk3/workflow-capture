@@ -443,7 +443,9 @@ def _cross_video_themes(df: pd.DataFrame) -> str:
         preview = entry["candidates"][:500]
         if len(entry["candidates"]) > 500:
             preview += "\n\n*(truncated)*"
-        lines.append(preview)
+        lines.append("```markdown")
+        lines.append(preview.rstrip())
+        lines.append("```")
         lines.append("")
 
     return "\n".join(lines)

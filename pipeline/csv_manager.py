@@ -362,20 +362,29 @@ def save_analysis_markdown(
     filename = f"{video_id}_{username}_{safe_task}.md"
     filepath = os.path.join(analyses_dir, filename)
 
-    # Build file with metadata header
+    analyzed_at = datetime.now().isoformat(timespec="seconds")
+
+    # Build file with metadata header and a readable summary block
     header = f"""---
 video_id: {video_id}
 username: {username}
 task: {task_description}
-analyzed_at: {datetime.now().isoformat(timespec="seconds")}
+analyzed_at: {analyzed_at}
 ---
+
+# Workflow Analysis
+
+- User: {username}
+- Task: {task_description}
+- Video ID: {video_id}
+- Analyzed At: {analyzed_at}
 
 """
 
     try:
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(header)
-            f.write(markdown_content)
+            f.write(markdown_content.strip() + "\n")
         return filepath
     except OSError as e:
         print(f"[ERROR] Could not save analysis markdown: {e}")
