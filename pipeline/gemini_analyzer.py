@@ -2,7 +2,7 @@
 L7S Workflow Analysis Pipeline - Gemini Video Analyzer
 
 Two-pass analysis with quality check using Gemini's File API:
-  Pass 1: Upload whole video + SOP/automation prompt → rich markdown (sections A-E)
+    Pass 1: Upload whole video + SOP/automation prompt → rich markdown (sections A-D)
   Pass 2: Send markdown to Gemini → structured JSON for ML pipelines
   Quality Check: Evaluate Pass 2 results to filter low-quality/non-workflow videos
   
@@ -70,13 +70,9 @@ def _get_client():
 # Prompts
 # =============================================================================
 
-# Pass 1: Rich workflow analysis prompt (produces markdown sections A-E)
+# Pass 1: Rich workflow analysis prompt (produces markdown sections A-D)
 ANALYSIS_PROMPT = """You are an AI workflow analyst.
-Your job is to audit how I complete a recurring work task and identify:
-1) the exact steps I follow
-2) what should and should not be automated
-3) how to automate it safely
-4) how to explain the findings visually
+Your job is to understand how this recurring work task is completed and extract details that help identify automation opportunities and risks.
 
 INPUT:
 I will provide a screen recording of me completing the task.
@@ -118,21 +114,10 @@ Also include:
 - What should NOT be automated yet
 - Why (human judgment, quality risk, edge cases, compliance)
 
-### D) Visual / infographic plan
+### D) Clarifying questions
 
-Design a visual explanation of this workflow and automation plan.
-Include:
-- A clear title
-- Sections for: SOP, automation opportunities, what not to automate
-- Suggested layout (flow diagram, columns, icons)
-- Short, punchy labels suitable for an infographic or slide
-Do NOT generate the image yet.
-Only plan it.
-
-### E) Clarifying questions
-
-Ask me 5 specific questions that would help you automate this perfectly.
-These should surface missing context rather than guessing"""
+Ask 5 specific questions that would reduce uncertainty and help automate safely.
+These should surface missing context rather than guessing."""
 
 
 # Pass 2: Structured feature extraction prompt (produces JSON for ML)
@@ -253,16 +238,15 @@ def _upload_video(video_path: str, video_id: str = "") -> object:
 
 def _parse_markdown_response(markdown_text: str) -> dict:
     """
-    Split the Gemini markdown response into sections A-E.
+    Split the Gemini markdown response into sections A-D.
 
     Returns dict with keys: sop, automation_candidates, automation_plan,
-    visual_plan, clarifying_questions, raw
+    clarifying_questions, raw
     """
     sections = {
         "sop": "",
         "automation_candidates": "",
         "automation_plan": "",
-        "visual_plan": "",
         "clarifying_questions": "",
         "raw": markdown_text,
     }
@@ -271,12 +255,11 @@ def _parse_markdown_response(markdown_text: str) -> dict:
         "A": "sop",
         "B": "automation_candidates",
         "C": "automation_plan",
-        "D": "visual_plan",
-        "E": "clarifying_questions",
+        "D": "clarifying_questions",
     }
 
     # Match section headers like "### A)", "## A)", "### A."
-    pattern = r'#{2,3}\s*([A-E])\s*\)'
+    pattern = r'#{2,3}\s*([A-D])\s*\)'
     matches = list(re.finditer(pattern, markdown_text))
 
     for i, match in enumerate(matches):
@@ -317,7 +300,7 @@ def analyze_video(
     Returns:
         Dict with:
             "markdown": str -- full Pass 1 response
-            "sections": dict -- parsed A-E sections
+            "sections": dict -- parsed A-D sections
             "structured": dict -- Pass 2 JSON for CSV/ML
             "is_useful": bool -- True if quality check passed
             "rejection_reason": str -- Why it was rejected (if is_useful=False)
