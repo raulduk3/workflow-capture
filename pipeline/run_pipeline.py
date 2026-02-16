@@ -180,7 +180,14 @@ def run_pipeline(args: argparse.Namespace) -> dict:
                 reason=reason,
             )
             mark_rejected(video_id, reason)
-            update_workflow_sessions_status(video_id, "Rejected", reason, args.sessions_csv)
+            update_workflow_sessions_status(
+                video_id,
+                "Rejected",
+                reason,
+                args.sessions_csv,
+                source_path=source_path,
+                mp4_path=mp4_path,
+            )
             stats["rejected"] += 1
             continue
 
@@ -202,7 +209,14 @@ def run_pipeline(args: argparse.Namespace) -> dict:
                         reason=reason
                     )
                     mark_rejected(video_id, reason)
-                    update_workflow_sessions_status(video_id, "Rejected", reason, args.sessions_csv)
+                    update_workflow_sessions_status(
+                        video_id,
+                        "Rejected",
+                        reason,
+                        args.sessions_csv,
+                        source_path=source_path,
+                        mp4_path=mp4_path,
+                    )
                     stats["rejected"] += 1
                     continue
 
@@ -215,7 +229,14 @@ def run_pipeline(args: argparse.Namespace) -> dict:
                         reason=reason
                     )
                     mark_rejected(video_id, reason)
-                    update_workflow_sessions_status(video_id, "Rejected", reason, args.sessions_csv)
+                    update_workflow_sessions_status(
+                        video_id,
+                        "Rejected",
+                        reason,
+                        args.sessions_csv,
+                        source_path=source_path,
+                        mp4_path=mp4_path,
+                    )
                     stats["rejected"] += 1
                     continue
 
@@ -247,7 +268,14 @@ def run_pipeline(args: argparse.Namespace) -> dict:
                         reason=reason
                     )
                     mark_rejected(video_id, reason)
-                    update_workflow_sessions_status(video_id, "Rejected", reason, args.sessions_csv)
+                    update_workflow_sessions_status(
+                        video_id,
+                        "Rejected",
+                        reason,
+                        args.sessions_csv,
+                        source_path=source_path,
+                        mp4_path=mp4_path,
+                    )
                     stats["rejected"] += 1
                     # Add delay before next video
                     if i < len(to_process):
@@ -283,7 +311,14 @@ def run_pipeline(args: argparse.Namespace) -> dict:
 
                 if append_row(row):
                     mark_processed(video_id)
-                    update_workflow_sessions_status(video_id, "Analyzed", "", args.sessions_csv)
+                    update_workflow_sessions_status(
+                        video_id,
+                        "Analyzed",
+                        "",
+                        args.sessions_csv,
+                        source_path=source_path,
+                        mp4_path=mp4_path,
+                    )
                     stats["processed"] += 1
                     print(f"  Written to CSV")
                 else:
