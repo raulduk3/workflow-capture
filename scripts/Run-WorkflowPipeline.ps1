@@ -123,7 +123,7 @@ if (-not $shareAvailable) {
 if ($LogRetentionDays -gt 0) {
     $logCutoff = (Get-Date).AddDays(-$LogRetentionDays)
     $oldLogs = Get-ChildItem $LogDir -Filter "*.log" -File -ErrorAction SilentlyContinue |
-               Where-Object { $_.LastWriteTime -lt $logCutoff }
+                Where-Object { $_.LastWriteTime -lt $logCutoff }
     if ($oldLogs -and $oldLogs.Count -gt 0) {
         Write-Log "Cleaning up $($oldLogs.Count) log file(s) older than $LogRetentionDays days"
         $oldLogs | Remove-Item -Force -ErrorAction SilentlyContinue
