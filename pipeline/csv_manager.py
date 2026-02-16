@@ -28,8 +28,8 @@ def ensure_output_dir() -> None:
 
 def move_to_misrecordings(source_path: str = "", mp4_path: str = "", reason: str = "") -> bool:
     """
-    Move rejected video files to the _misrecordings folder.
-    Moves both the original .webm and the converted MP4 if they exist.
+    Move rejected source videos to a per-user _misrecordings folder on the share
+    and delete the converted MP4 to keep the local workspace clean.
 
     Args:
         source_path: Path to the original .webm video file
@@ -37,63 +37,55 @@ def move_to_misrecordings(source_path: str = "", mp4_path: str = "", reason: str
         reason: Optional reason for moving (used in log filename)
 
     Returns:
-        True if at least one file was moved successfully, False otherwise.
+        True if at least one file was moved or deleted successfully, False otherwise.
     """
     import shutil
-    
+
     moved_any = False
-    os.makedirs(MISRECORDINGS_DIR, exist_ok=True)
-    
-    # Move source .webm file
+
+    # Move source .webm file into a sibling _misrecordings folder on the share
     if source_path and os.path.isfile(source_path):
         try:
+            source_dir = Path(source_path).parent
+            misrecordings_dir = source_dir / "_misrecordings"
+            os.makedirs(misrecordings_dir, exist_ok=True)
+
             filename = Path(source_path).name
-            dest_path = os.path.join(MISRECORDINGS_DIR, filename)
-            
+            dest_path = misrecordings_dir / filename
+
             # If destination already exists, add a timestamp
-            if os.path.exists(dest_path):
+            if dest_path.exists():
                 name_parts = Path(filename).stem
                 ext = Path(filename).suffix
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                dest_path = os.path.join(MISRECORDINGS_DIR, f"{name_parts}_{timestamp}{ext}")
-            
-            shutil.move(source_path, dest_path)
-            print(f"  Moved source to: {Path(dest_path).name}")
+                dest_path = misrecordings_dir / f"{name_parts}_{timestamp}{ext}"
+
+            shutil.move(source_path, str(dest_path))
+            print(f"  Moved source to: {dest_path.name}")
             moved_any = True
-            
-            # Create a small log file with the reason (only once)
+
+            # Create a small log file with the reason
             if reason:
-                reason_file = dest_path + ".reason.txt"
+                reason_file = str(dest_path) + ".reason.txt"
                 with open(reason_file, "w", encoding="utf-8") as f:
                     f.write(f"Moved at: {datetime.now().isoformat()}\n")
                     f.write(f"Reason: {reason}\n")
-                    
+
         except Exception as e:
             print(f"[ERROR] Failed to move source video: {e}")
-    
-    # Move converted MP4 file
+
+    # Delete converted MP4 file (keep local processing folder clean)
     if mp4_path and os.path.isfile(mp4_path):
         try:
-            filename = Path(mp4_path).name
-            dest_path = os.path.join(MISRECORDINGS_DIR, filename)
-            
-            # If destination already exists, add a timestamp
-            if os.path.exists(dest_path):
-                name_parts = Path(filename).stem
-                ext = Path(filename).suffix
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                dest_path = os.path.join(MISRECORDINGS_DIR, f"{name_parts}_{timestamp}{ext}")
-            
-            shutil.move(mp4_path, dest_path)
-            print(f"  Moved MP4 to: {Path(dest_path).name}")
+            os.remove(mp4_path)
+            print(f"  Deleted MP4: {Path(mp4_path).name}")
             moved_any = True
-            
         except Exception as e:
-            print(f"[ERROR] Failed to move MP4 video: {e}")
-    
+            print(f"[ERROR] Failed to delete MP4 video: {e}")
+
     if not moved_any:
-        print(f"[WARN] No video files found to move")
-        
+        print("[WARN] No video files found to move or delete")
+
     return moved_any
 
 
