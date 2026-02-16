@@ -71,10 +71,6 @@ INPUT:
 I will provide a screen recording of me completing the task.
 The user described this task as: "{task_description}"
 Treat this input as if you watched me complete the task end-to-end.
-
-TASK:
-This is a recurring workflow that takes multiple hours and involves multiple tools and decision points.
-
 ---
 
 OUTPUT THE FOLLOWING SECTIONS (STRICT):
