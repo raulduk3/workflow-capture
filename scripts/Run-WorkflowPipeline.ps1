@@ -28,7 +28,7 @@ param(
     [switch]$MetadataOnly = $false,
 
     [Parameter(Mandatory=$false)]
-    [switch]$GenerateReport = $false,
+    [switch]$GenerateReport = $true,
 
     [Parameter(Mandatory=$false)]
     [string]$User = "",
