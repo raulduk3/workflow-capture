@@ -149,6 +149,41 @@ def run_pipeline(args: argparse.Namespace) -> dict:
             stats["processed"] += 1
             continue
 
+        # --- Sanity checks: required metadata and files ---
+        missing_fields = []
+        if not video_meta.get("username"):
+            missing_fields.append("username")
+        if not video_meta.get("timestamp"):
+            missing_fields.append("timestamp")
+        if not video_meta.get("machine_id"):
+            missing_fields.append("machine_id")
+        if not video_meta.get("task_description"):
+            missing_fields.append("task_description")
+
+        mp4_missing = not (mp4_path and Path(mp4_path).is_file())
+        source_missing = not (source_path and Path(source_path).is_file())
+
+        if missing_fields or mp4_missing or source_missing:
+            reasons = []
+            if missing_fields:
+                reasons.append(f"Missing metadata: {', '.join(missing_fields)}")
+            if mp4_missing:
+                reasons.append("Missing MP4")
+            if source_missing:
+                reasons.append("Missing source WebM")
+            reason = "; ".join(reasons) if reasons else "Invalid session metadata"
+
+            print(f"  REJECTED: {reason}")
+            move_to_misrecordings(
+                source_path=source_path,
+                mp4_path=mp4_path,
+                reason=reason,
+            )
+            mark_rejected(video_id, reason)
+            update_workflow_sessions_status(video_id, "Rejected", reason, args.sessions_csv)
+            stats["rejected"] += 1
+            continue
+
         try:
             # --- Stage 2: Get video metadata ---
             print(f"  Getting video metadata...")
