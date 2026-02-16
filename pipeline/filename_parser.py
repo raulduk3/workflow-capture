@@ -169,9 +169,9 @@ def load_converted_sessions(csv_path: str, single_user: str = "") -> list[dict]:
                 if single_user and username != single_user.lower():
                     continue
 
-                if not mp4_path or not os.path.isfile(mp4_path):
+                mp4_exists = bool(mp4_path and os.path.isfile(mp4_path))
+                if not mp4_exists:
                     print(f"[WARN] MP4 missing for row in CSV: {mp4_path}")
-                    continue
 
                 # Use source_path if available for stable IDs; fallback to mp4_path
                 id_source = source_path if source_path else mp4_path
@@ -187,6 +187,7 @@ def load_converted_sessions(csv_path: str, single_user: str = "") -> list[dict]:
                     "hour_of_day": (row.get("HourOfDay") or "").strip(),
                     "source_path": source_path,
                     "mp4_path": mp4_path,
+                    "mp4_exists": mp4_exists,
                 })
     except OSError as e:
         print(f"[ERROR] Could not read sessions CSV: {e}")
