@@ -3,14 +3,16 @@ L7S Workflow Analysis Pipeline - Orchestrator
 
 Main entry point that wires all pipeline stages together:
   1. Load converted MP4 sessions from workflow_sessions.csv
-  2. Skip already-processed videos
+  2. Skip already-processed/rejected videos
   3. For each new video:
      a. Parse filename → metadata
      b. Get duration/size via ffprobe
-     c. Upload video to Gemini → two-pass analysis
-     d. Save per-video markdown analysis
-     e. Append summary row to analysis CSV
-     f. Mark as processed
+     c. Check duration bounds (5s - 1hr)
+     d. Upload video to Gemini → two-pass analysis
+     e. Check Pass 2 quality (automation score, SOP steps, etc.)
+     f. If high quality: save markdown + append to CSV
+     g. If low quality: move to _misrecordings
+     h. Mark as processed or rejected
   4. Print summary
 
 Usage:
@@ -51,7 +53,7 @@ from csv_manager import (
 )
 from filename_parser import load_converted_sessions
 from frame_extractor import get_video_metadata
-from gemini_analyzer import analyze_video, validate_video
+from gemini_analyzer import analyze_video
 
 
 def run_pipeline(args: argparse.Namespace) -> dict:
@@ -186,15 +188,23 @@ def run_pipeline(args: argparse.Namespace) -> dict:
             analysis_md_path = ""
 
             if not args.metadata_only:
-                # --- Stage 3a: Validation check (is this useful?) ---
-                print(f"  Validating video quality with Gemini...")
-                validation_result = validate_video(
+                # --- Stage 3: Gemini two-pass analysis with quality check ---
+                print(f"  Analyzing with Gemini (two-pass + quality check)...")
+                gemini_result = analyze_video(
                     video_path=video_path,
+                    task_description=video_meta["task_description"],
                     video_id=video_id,
                 )
 
-                if not validation_result.get("is_useful", False):
-                    reason = validation_result.get("reason", "Not a useful workflow recording")
+                if not gemini_result:
+                    print(f"  ERROR: Gemini analysis failed - no results returned")
+                    stats["failed"] += 1
+                    stats["errors"].append(f"{filename}: Gemini analysis failed")
+                    continue
+
+                # Check if Pass 1 quality indicates useful workflow
+                if not gemini_result.get("is_useful", False):
+                    reason = gemini_result.get("rejection_reason", "Low quality analysis results")
                     print(f"  REJECTED: {reason}")
                     move_to_misrecordings(
                         source_path=video_meta.get("source_path", ""),
@@ -208,20 +218,6 @@ def run_pipeline(args: argparse.Namespace) -> dict:
                     if i < len(to_process):
                         print(f"  Waiting {API_CALL_DELAY_SECONDS:.0f}s before next video...")
                         time.sleep(API_CALL_DELAY_SECONDS)
-                    continue
-
-                # --- Stage 3b: Gemini two-pass analysis (only for useful videos) ---
-                print(f"  Analyzing with Gemini (full two-pass analysis)...")
-                gemini_result = analyze_video(
-                    video_path=video_path,
-                    task_description=video_meta["task_description"],
-                    video_id=video_id,
-                )
-
-                if not gemini_result:
-                    print(f"  ERROR: Gemini analysis failed - no results returned")
-                    stats["failed"] += 1
-                    stats["errors"].append(f"{filename}: Gemini analysis failed")
                     continue
 
                 # --- Stage 4: Save per-video markdown ---
