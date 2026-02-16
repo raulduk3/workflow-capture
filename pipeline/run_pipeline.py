@@ -2,17 +2,15 @@
 L7S Workflow Analysis Pipeline - Orchestrator
 
 Main entry point that wires all pipeline stages together:
-    1. Load converted MP4 sessions from workflow_sessions.csv
+  1. Load converted MP4 sessions from workflow_sessions.csv
   2. Skip already-processed videos
   3. For each new video:
      a. Parse filename → metadata
      b. Get duration/size via ffprobe
-     c. Extract 35 frames
-     d. Send to Gemini Vision → analysis JSON
-     e. Apply pattern detection rules
-     f. Append row to analysis CSV
-     g. Mark as processed
-     h. Clean up temp frames
+     c. Upload video to Gemini → two-pass analysis
+     d. Save per-video markdown analysis
+     e. Append summary row to analysis CSV
+     f. Mark as processed
   4. Print summary
 
 Usage:
@@ -116,7 +114,7 @@ def run_pipeline(args: argparse.Namespace) -> dict:
 
     print(f"  Will process: {len(to_process)} video(s) (skipping {stats['skipped']} already done)")
 
-    # --- Stage 2-4: Process each video ---
+    # --- Stage 2-5: Process each video ---
     for i, video_meta in enumerate(to_process, 1):
         video_id = video_meta["video_id"]
         source_path = video_meta.get("source_path", "")
@@ -146,53 +144,49 @@ def run_pipeline(args: argparse.Namespace) -> dict:
             print(f"  Duration: {file_metadata['duration_sec']}s | Size: {file_metadata['file_size_mb']} MB")
 
             gemini_result = None
+            analysis_md_path = ""
+
             if not args.metadata_only:
-                # --- Stage 3: Extract frames ---
-                print(f"  Extracting frames...")
-                frames = extract_frames(video_path)
+                # --- Stage 3: Gemini two-pass analysis ---
+                print(f"  Analyzing with Gemini (whole video)...")
+                gemini_result = analyze_video(
+                    video_path=video_path,
+                    task_description=video_meta["task_description"],
+                    video_id=video_id,
+                )
 
-                if not frames:
-                    print(f"  WARNING: No frames extracted, skipping Gemini analysis")
-                else:
-                    print(f"  Extracted {len(frames)} frames")
-                    frames_dir = str(Path(frames[0]).parent)
+                if gemini_result:
+                    structured = gemini_result["structured"]
+                    print(f"  Primary app: {structured['primary_app']}")
+                    print(f"  Automation score: {structured['automation_score']}")
+                    print(f"  SOP steps: {structured['sop_step_count']}")
+                    print(f"  Top automation candidate: {structured['top_automation_candidate']}")
 
-                    # --- Stage 4: Gemini analysis ---
-                    print(f"  Analyzing with Gemini...")
-                    gemini_result = analyze_video(
-                        frame_paths=frames,
-                        task_description=video_meta["task_description"],
+                    # --- Stage 4: Save per-video markdown ---
+                    analysis_md_path = save_analysis_markdown(
                         video_id=video_id,
+                        username=username,
+                        task_description=video_meta["task_description"],
+                        markdown_content=gemini_result["markdown"],
                     )
+                    if analysis_md_path:
+                        print(f"  Analysis saved: {Path(analysis_md_path).name}")
+                else:
+                    print(f"  WARNING: Gemini analysis returned no results")
 
-                    if gemini_result:
-                        print(f"  Primary app: {gemini_result['primary_app']}")
-                        print(f"  Automation score: {gemini_result['automation_score']}")
-                        print(f"  Friction events: {gemini_result['friction_count']}")
-                    else:
-                        print(f"  WARNING: Gemini analysis returned no results")
-
-                    # Clean up frames
-                    cleanup_frames(frames_dir)
-
-            # --- Stage 5: Pattern detection ---
-            pattern_flags = detect_patterns(gemini_result) if gemini_result else ""
-            if pattern_flags:
-                print(f"  Pattern flags: {pattern_flags}")
-
-            # --- Stage 6: Build and append CSV row ---
+            # --- Stage 5: Build and append CSV row ---
             row = build_row(
                 parsed_metadata=video_meta,
                 video_metadata=file_metadata,
-                gemini_analysis=gemini_result,
-                pattern_flags=pattern_flags,
+                gemini_structured=gemini_result["structured"] if gemini_result else None,
+                analysis_md_path=analysis_md_path,
                 mp4_path=mp4_path,
             )
 
             if append_row(row):
                 mark_processed(video_id)
                 stats["processed"] += 1
-                print(f"  ✓ Written to CSV")
+                print(f"  Written to CSV")
             else:
                 stats["failed"] += 1
                 stats["errors"].append(f"CSV write failed: {filename}")
