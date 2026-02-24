@@ -145,3 +145,10 @@ release/
 pipeline/.env
 pipeline/__pycache__/
 pipeline/*.pyc
+
+# Analysis outputs
+/insights_*.md
+/insights_*.pdf
+/reports/insights_*.md
+/reports/insights_*.pdf
+
