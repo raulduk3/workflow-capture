@@ -19,7 +19,7 @@
 
 param(
     [Parameter(Mandatory=$false)]
-    [string]$SourceShare = [Environment]::GetEnvironmentVariable("WORKFLOW_SOURCE_SHARE") ?? "\\bulley-fs1\WORKFLOW",
+    [string]$SourceShare = "\\bulley-fs1\WORKFLOW",
 
     [Parameter(Mandatory=$false)]
     [string]$OutputRoot = "C:\temp\WorkflowProcessing",

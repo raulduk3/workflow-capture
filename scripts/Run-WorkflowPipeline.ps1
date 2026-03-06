@@ -105,10 +105,7 @@ $overallSuccess = $true
 # Pre-flight: Validate source directory connectivity
 # =============================================================================
 
-$sourceShare = [Environment]::GetEnvironmentVariable("WORKFLOW_SOURCE_SHARE")
-if (-not $sourceShare) {
-    $sourceShare = "\\bulley-fs1\WORKFLOW"
-}
+$sourceShare = "\\bulley-fs1\WORKFLOW"
 $shareRetries = 3
 $shareAvailable = $false
 
