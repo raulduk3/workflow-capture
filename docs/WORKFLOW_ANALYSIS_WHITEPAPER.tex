@@ -1,4 +1,4 @@
-\documentclass[9pt]{article}
+    \documentclass[9pt]{article}
 \usepackage[top=0.4in, bottom=0.4in, left=0.5in, right=0.5in]{geometry}
 \usepackage{enumitem}
 \usepackage{booktabs}
@@ -22,7 +22,7 @@ Identify tasks across the organization that are strong candidates for AI-assiste
 We don't know which tasks are good automation candidates. Employees have intuitions, but we lack data. Video recordings show real workflows—but we can't watch them all. We need to convert raw footage into structured, queryable evidence that reveals where AI can add value.
 
 \textbf{Solution.}
-A pipeline converting each video into one row of structured data: (1) parse filename metadata, (2) extract 35 frames via ffmpeg, (3) analyze frames with Gemini Vision API, (4) append results to CSV. The dataset surfaces automation opportunities through patterns in actions, app usage, and workflow structure.
+A pipeline converting each video into one row of structured data: (1) parse filename metadata, (2) upload the full video via Gemini File API (native video understanding; no client-side frame sampling), (3) analyze with Gemini 1.5 Pro Vision, (4) append results to CSV. The dataset surfaces automation opportunities through patterns in actions, app usage, and workflow structure.
 
 \textbf{Feature Space (19 fields per video):}
 
@@ -42,7 +42,7 @@ A pipeline converting each video into one row of structured data: (1) parse file
 \midrule
 \multicolumn{4}{@{}l}{\textit{From Video File}} \\
 \texttt{duration\_sec} & int & ffprobe & Recording length \\
-\texttt{file\_size\_mb} & float & filesystem & Activity proxy \\
+\texttt{file\_size\_mb} & float & filesystem & Recording size in MB (rough heuristic; encoding-dependent) \\
 \midrule
 \multicolumn{4}{@{}l}{\textit{From Gemini Vision}} \\
 \texttt{primary\_app} & string & Gemini & Most-used application \\
@@ -50,7 +50,7 @@ A pipeline converting each video into one row of structured data: (1) parse file
 \texttt{detected\_actions} & JSON & Gemini & Actions (data entry, copy-paste, etc.) \\
 \texttt{friction\_events} & JSON & Gemini & Pain points (errors, repeated steps) \\
 \texttt{friction\_count} & int & derived & Number of friction events \\
-\texttt{automation\_score} & float 0–1 & Gemini & AI automation potential \\
+\texttt{automation\_score} & float 0--1 & Gemini & Gemini-estimated AI replaceability: how readily this task could be automated based on observed repetitiveness, predictability, manual step burden, and cross-app data transfer \\
 \texttt{workflow\_category} & string & Gemini & Task classification \\
 \midrule
 \multicolumn{4}{@{}l}{\textit{From ActivTrak (joined by username + date)}} \\
@@ -80,17 +80,5 @@ This produces data and recommendations, not automation itself. Output is a datas
 
 \vfill
 {\small\itshape Prepared by Richard Alvarez — Layer 7 Systems ML Engineering}
-
-\end{document}
-Once we have structured data, we can run standard analysis without building custom models:
-\begin{itemize}
-\item \textbf{Clustering} — Find groups of similar workflows (e.g., "invoice processing" tasks that look alike across users)
-\item \textbf{Anomaly detection} — Surface outliers with unusually high friction or duration
-\item \textbf{Classification} — Tag workflows by department, application, or task type
-\item \textbf{Correlation} — Compare video observations against ActivTrak productivity scores
-\end{itemize}
-
-\textbf{Cost \& Timeline.}
-Gemini API: ~\$3.50/day at 100 videos. Monthly: ~\$105. Storage: negligible. Timeline: 7 days to working pipeline and first insights report.
 
 \end{document}
