@@ -168,3 +168,4 @@ pipeline/*.pyc
 /reports/insights_*.md
 /reports/insights_*.pdf
 
+docs/
