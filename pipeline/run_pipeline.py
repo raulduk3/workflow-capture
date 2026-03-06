@@ -22,6 +22,8 @@ Usage:
     python run_pipeline.py --dry-run                 # Preview only
     python run_pipeline.py --metadata-only           # Skip Gemini, just extract file metadata
     python run_pipeline.py --report                  # Generate insights report after processing
+    python run_pipeline.py --education               # Run education analysis pass
+    python run_pipeline.py --education-report        # Generate education insights report
 """
 
 import argparse
@@ -34,26 +36,33 @@ from config import (
     API_CALL_DELAY_SECONDS,
     CONVERSION_CSV,
     MAX_VIDEO_DURATION_SEC,
+    MIN_EDUCATION_DURATION_SEC,
     MIN_VIDEO_DURATION_SEC,
     MP4_DIR,
     OUTPUT_DIR,
+    EDUCATION_PROCESSING_LOG,
 )
 from csv_manager import (
+    append_education_row,
     append_row,
+    build_education_row,
     build_row,
     ensure_output_dir,
     get_csv_stats,
+    load_education_rejected_ids,
     load_processed_ids,
     load_rejected_ids,
+    mark_education_rejected,
     mark_processed,
     mark_rejected,
     move_to_misrecordings,
     save_analysis_markdown,
+    save_education_markdown,
     update_workflow_sessions_status,
 )
 from filename_parser import load_converted_sessions
 from frame_extractor import get_video_metadata
-from gemini_analyzer import analyze_video
+from gemini_analyzer import analyze_video, analyze_video_education
 
 
 def run_pipeline(args: argparse.Namespace) -> dict:
@@ -365,6 +374,237 @@ def run_pipeline(args: argparse.Namespace) -> dict:
     return stats
 
 
+# =============================================================================
+# Education Pipeline
+# =============================================================================
+
+# Apps that indicate pipeline/utility recordings, not real user workflows
+_EDUCATION_EXCLUDED_APPS = {"Workflow Capture", "Sessions", "Snipping Tool"}
+
+
+def run_education_pipeline(args: argparse.Namespace) -> dict:
+    """
+    Execute the education-focused analysis pipeline.
+    Uses separate dedup logs, CSV, and markdown directory.
+
+    Returns:
+        Summary dict with counts: total, processed, skipped, failed, errors.
+    """
+    start_time = datetime.now()
+    stats = {
+        "total": 0,
+        "processed": 0,
+        "skipped": 0,
+        "rejected": 0,
+        "failed": 0,
+        "errors": [],
+    }
+
+    # --- Pre-flight ---
+    print("=" * 60)
+    print("L7S Workflow Analysis Pipeline — EDUCATION MODE")
+    print("=" * 60)
+    print(f"Source:      {args.source}")
+    print(f"Sessions:    {args.sessions_csv}")
+    print(f"Output:      {OUTPUT_DIR}")
+    if args.user:
+        print(f"Filter:      user = {args.user}")
+    if args.limit:
+        print(f"Limit:       {args.limit} videos")
+    if args.dry_run:
+        print(f"Mode:        DRY RUN")
+    print("=" * 60)
+
+    if not args.dry_run:
+        ensure_output_dir()
+
+    # --- Stage 1: Discover videos ---
+    print("\n[Stage 1] Loading converted sessions...")
+    videos = load_converted_sessions(args.sessions_csv, single_user=args.user)
+    stats["total"] = len(videos)
+
+    if not videos:
+        print("  No videos found.")
+        return stats
+
+    print(f"  Found {len(videos)} video(s)")
+
+    # --- Load education-specific dedup logs ---
+    processed_ids = load_processed_ids(EDUCATION_PROCESSING_LOG)
+    rejected_ids = load_education_rejected_ids()
+    print(f"  Education previously processed: {len(processed_ids)} video(s)")
+    print(f"  Education previously rejected: {len(rejected_ids)} video(s)")
+
+    already_handled = processed_ids | rejected_ids
+    to_process = [v for v in videos if v["video_id"] not in already_handled]
+    stats["skipped"] = len(videos) - len(to_process)
+
+    # --- Pre-filter: exclude localutility user ---
+    to_process = [v for v in to_process if v.get("username", "") != "localutility"]
+
+    if not to_process:
+        print("  All videos already processed or excluded. Nothing to do.")
+        return stats
+
+    if args.limit and args.limit > 0:
+        to_process = to_process[:args.limit]
+
+    print(f"  Will process: {len(to_process)} video(s) (skipping {stats['skipped']} already done)")
+
+    # --- Stage 2-5: Process each video ---
+    for i, video_meta in enumerate(to_process, 1):
+        video_id = video_meta["video_id"]
+        source_path = video_meta.get("source_path", "")
+        mp4_path = video_meta.get("mp4_path", "")
+        video_path = mp4_path if mp4_path else source_path
+        filename = Path(video_path).name if video_path else video_id
+        username = video_meta["username"]
+
+        if not video_path:
+            stats["failed"] += 1
+            stats["errors"].append("Missing video path in sessions CSV")
+            print("  ERROR: Missing video path in sessions CSV")
+            continue
+
+        print(f"\n[{i}/{len(to_process)}] {filename}")
+        print(f"  User: {username} | Task: {video_meta['task_description']}")
+
+        if args.dry_run:
+            print(f"  DRY RUN: Would process this video for education analysis")
+            stats["processed"] += 1
+            continue
+
+        # --- Sanity checks ---
+        mp4_missing = not (mp4_path and Path(mp4_path).is_file())
+        if mp4_missing:
+            reason = "Missing MP4 file"
+            print(f"  REJECTED: {reason}")
+            mark_education_rejected(video_id, reason)
+            stats["rejected"] += 1
+            continue
+
+        try:
+            # --- Stage 2: Get video metadata ---
+            print(f"  Getting video metadata...")
+            file_metadata = get_video_metadata(video_path)
+            duration = file_metadata['duration_sec']
+            print(f"  Duration: {duration}s | Size: {file_metadata['file_size_mb']} MB")
+
+            # --- Education duration filter (stricter: 30s minimum) ---
+            if duration > 0 and duration < MIN_EDUCATION_DURATION_SEC:
+                reason = f"Too short for education analysis: {duration}s < {MIN_EDUCATION_DURATION_SEC}s"
+                print(f"  REJECTED: {reason}")
+                mark_education_rejected(video_id, reason)
+                stats["rejected"] += 1
+                continue
+
+            if duration > 0 and duration > MAX_VIDEO_DURATION_SEC:
+                reason = f"Too long: {duration}s"
+                print(f"  REJECTED: {reason}")
+                mark_education_rejected(video_id, reason)
+                stats["rejected"] += 1
+                continue
+
+            # --- Stage 3: Gemini education analysis ---
+            print(f"  Analyzing with Gemini (education two-pass)...")
+            gemini_result = analyze_video_education(
+                video_path=video_path,
+                task_description=video_meta["task_description"],
+                video_id=video_id,
+            )
+
+            if not gemini_result:
+                print(f"  ERROR: Gemini education analysis failed")
+                stats["failed"] += 1
+                stats["errors"].append(f"{filename}: Education analysis failed")
+                continue
+
+            structured = gemini_result["structured"]
+
+            # --- Education-specific app exclusion (post-analysis) ---
+            # We check primary_app from the automation CSV or infer from education summary
+            # The education quality gate handles content-level rejection
+
+            if not gemini_result.get("is_useful", False):
+                reason = gemini_result.get("rejection_reason", "Low quality education analysis")
+                print(f"  REJECTED: {reason}")
+                mark_education_rejected(video_id, reason)
+                stats["rejected"] += 1
+                if i < len(to_process):
+                    print(f"  Waiting {API_CALL_DELAY_SECONDS:.0f}s before next video...")
+                    time.sleep(API_CALL_DELAY_SECONDS)
+                continue
+
+            # --- Stage 4: Save education markdown ---
+            print(f"  Skill level: {structured['skill_level']}")
+            print(f"  Learning category: {structured['learning_category']}")
+            print(f"  Time save opportunity: {structured['time_save_opportunity']}")
+
+            education_md_path = save_education_markdown(
+                video_id=video_id,
+                username=username,
+                task_description=video_meta["task_description"],
+                markdown_content=gemini_result["markdown"],
+            )
+            if education_md_path:
+                print(f"  Education analysis saved: {Path(education_md_path).name}")
+
+            # --- Stage 5: Build and append education CSV row ---
+            row = build_education_row(
+                parsed_metadata=video_meta,
+                video_metadata=file_metadata,
+                education_structured=structured,
+                education_md_path=education_md_path,
+                mp4_path=mp4_path,
+            )
+
+            if append_education_row(row):
+                mark_processed(video_id, EDUCATION_PROCESSING_LOG)
+                stats["processed"] += 1
+                print(f"  Written to education CSV")
+            else:
+                stats["failed"] += 1
+                stats["errors"].append(f"Education CSV write failed: {filename}")
+
+            # Rate limit delay
+            if i < len(to_process):
+                print(f"  Waiting {API_CALL_DELAY_SECONDS:.0f}s before next video...")
+                time.sleep(API_CALL_DELAY_SECONDS)
+
+        except Exception as e:
+            stats["failed"] += 1
+            stats["errors"].append(f"{filename}: {e}")
+            print(f"  ERROR: {e}")
+            continue
+
+    # --- Summary ---
+    elapsed = (datetime.now() - start_time).total_seconds()
+    print("\n" + "=" * 60)
+    print("Education Pipeline Complete")
+    print("=" * 60)
+    print(f"Total videos found:    {stats['total']}")
+    print(f"Processed:             {stats['processed']}")
+    print(f"Skipped (existing):    {stats['skipped']}")
+    print(f"Rejected (filtered):   {stats['rejected']}")
+    print(f"Failed:                {stats['failed']}")
+    print(f"Elapsed time:          {elapsed:.1f}s")
+
+    if stats["errors"]:
+        print(f"\nErrors:")
+        for err in stats["errors"]:
+            print(f"  - {err}")
+
+    from config import EDUCATION_CSV
+    edu_stats = get_csv_stats(EDUCATION_CSV)
+    print(f"\nEducation CSV Status:")
+    print(f"  Total rows:     {edu_stats['total_rows']}")
+    print(f"  Unique users:   {edu_stats['unique_users']}")
+    print(f"  Date range:     {edu_stats['date_range']}")
+    print("=" * 60)
+
+    return stats
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="L7S Workflow Analysis Pipeline - Process workflow recordings into structured data",
@@ -416,13 +656,29 @@ Examples:
         action="store_true",
         help="Generate insights report after processing",
     )
+    parser.add_argument(
+        "--education",
+        action="store_true",
+        help="Run education-focused analysis pass (separate from automation)",
+    )
+    parser.add_argument(
+        "--education-report",
+        action="store_true",
+        help="Generate education insights report",
+    )
 
     args = parser.parse_args()
 
-    # Run the pipeline
-    stats = run_pipeline(args)
+    # Determine which pipeline to run
+    if args.education:
+        stats = run_education_pipeline(args)
+    elif not args.education_report:
+        # Normal automation pipeline (skip if only --education-report)
+        stats = run_pipeline(args)
+    else:
+        stats = {"failed": 0}
 
-    # Generate report if requested
+    # Generate automation report if requested
     if args.report and not args.dry_run:
         print("\nGenerating insights report...")
         try:
@@ -432,6 +688,17 @@ Examples:
                 print(f"Report generated: {report_path}")
         except Exception as e:
             print(f"Report generation failed: {e}")
+
+    # Generate education report if requested
+    if args.education_report and not args.dry_run:
+        print("\nGenerating education insights report...")
+        try:
+            from education_report_generator import generate_education_report
+            report_path = generate_education_report()
+            if report_path:
+                print(f"Education report generated: {report_path}")
+        except Exception as e:
+            print(f"Education report generation failed: {e}")
 
     # Exit with appropriate code
     if stats["failed"] > 0:
