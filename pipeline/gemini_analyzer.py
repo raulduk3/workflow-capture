@@ -675,6 +675,259 @@ def _check_analysis_quality(structured: dict) -> dict:
     return {"is_useful": True, "reason": ""}
 
 
+# =============================================================================
+# Education Analysis
+# =============================================================================
+
+
+def _parse_education_markdown_response(markdown_text: str) -> dict:
+    """
+    Split the Gemini education markdown response into sections E-H.
+
+    Returns dict with keys: ai_assistable_moments, missed_tool_features,
+    skill_assessment, learning_recommendations, raw
+    """
+    sections = {
+        "ai_assistable_moments": "",
+        "missed_tool_features": "",
+        "skill_assessment": "",
+        "learning_recommendations": "",
+        "raw": markdown_text,
+    }
+
+    section_map = {
+        "E": "ai_assistable_moments",
+        "F": "missed_tool_features",
+        "G": "skill_assessment",
+        "H": "learning_recommendations",
+    }
+
+    # Match section headers like "### E)", "## E)", "### E."
+    pattern = r'#{2,3}\s*([E-H])\s*\)'
+    matches = list(re.finditer(pattern, markdown_text))
+
+    for i, match in enumerate(matches):
+        letter = match.group(1)
+        key = section_map.get(letter)
+        if not key:
+            continue
+
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(markdown_text)
+        sections[key] = markdown_text[start:end].strip()
+
+    return sections
+
+
+def _check_education_quality(structured: dict) -> dict:
+    """
+    Education-specific quality gate. More permissive than automation gate —
+    even a "boring" recording may reveal skill gaps.
+
+    Reject only if:
+    - primary app is a pipeline/utility app (Workflow Capture, Sessions, Snipping Tool)
+    - username is localutility (test recordings)
+
+    Note: duration filtering is done in run_pipeline.py before Gemini upload.
+
+    Returns:
+        Dict with "is_useful" (bool) and "reason" (str)
+    """
+    workflow_summary = structured.get("workflow_summary", "").strip()
+    ai_moments = structured.get("ai_assistable_moments", "[]")
+    training_modules = structured.get("recommended_training_modules", "[]")
+
+    # Parse JSON lists to check if they're empty
+    try:
+        moments_list = json.loads(ai_moments) if isinstance(ai_moments, str) else ai_moments
+    except (json.JSONDecodeError, TypeError):
+        moments_list = []
+
+    try:
+        modules_list = json.loads(training_modules) if isinstance(training_modules, str) else training_modules
+    except (json.JSONDecodeError, TypeError):
+        modules_list = []
+
+    # Reject if no AI-assistable moments AND no learning recommendations
+    if not moments_list and not modules_list:
+        return {"is_useful": False, "reason": "No AI-assistable moments and no learning recommendations found"}
+
+    if not workflow_summary or len(workflow_summary) < 10:
+        return {"is_useful": False, "reason": "No meaningful workflow summary"}
+
+    return {"is_useful": True, "reason": ""}
+
+
+def _parse_education_json_response(response_text: str, video_id: str) -> dict:
+    """Parse and validate the Education Pass 2 structured JSON response."""
+    try:
+        data = json.loads(response_text)
+    except json.JSONDecodeError:
+        match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                print(f"[ERROR] Could not parse JSON from education Pass 2 response for {video_id}")
+                return _empty_education_structured()
+        else:
+            print(f"[ERROR] Education Pass 2 response is not valid JSON for {video_id}")
+            return _empty_education_structured()
+
+    valid_skill_levels = ("beginner", "intermediate", "advanced")
+    valid_categories = (
+        "spreadsheet_skills", "email_productivity", "document_creation",
+        "data_lookup_synthesis", "cross_system_data_movement",
+        "communication_tools", "approval_processes", "other",
+    )
+    valid_time_save = ("minimal", "moderate", "significant", "transformative")
+
+    skill_level = str(data.get("skill_level", "beginner")).lower().strip()
+    if skill_level not in valid_skill_levels:
+        skill_level = "beginner"
+
+    learning_category = str(data.get("learning_category", "other")).lower().strip()
+    if learning_category not in valid_categories:
+        learning_category = "other"
+
+    time_save = str(data.get("time_save_opportunity", "moderate")).lower().strip()
+    if time_save not in valid_time_save:
+        time_save = "moderate"
+
+    return {
+        "workflow_summary": str(data.get("workflow_summary", "")),
+        "ai_assistable_moments": _ensure_json_list(data.get("ai_assistable_moments", [])),
+        "missed_tool_features": _ensure_json_list(data.get("missed_tool_features", [])),
+        "manual_effort_description": str(data.get("manual_effort_description", "")),
+        "skill_level": skill_level,
+        "skill_level_reasoning": str(data.get("skill_level_reasoning", "")),
+        "learning_category": learning_category,
+        "recommended_training_modules": _ensure_json_list(data.get("recommended_training_modules", [])),
+        "example_ai_prompt": str(data.get("example_ai_prompt", "")),
+        "time_save_opportunity": time_save,
+    }
+
+
+def _empty_education_structured() -> dict:
+    """Return empty education structured data when analysis fails."""
+    return {
+        "workflow_summary": "",
+        "ai_assistable_moments": "[]",
+        "missed_tool_features": "[]",
+        "manual_effort_description": "",
+        "skill_level": "beginner",
+        "skill_level_reasoning": "",
+        "learning_category": "other",
+        "recommended_training_modules": "[]",
+        "example_ai_prompt": "",
+        "time_save_opportunity": "moderate",
+    }
+
+
+def analyze_video_education(
+    video_path: str,
+    task_description: str,
+    video_id: str = "",
+) -> Optional[dict]:
+    """
+    Upload video to Gemini and perform education-focused two-pass analysis.
+
+    Pass 1: Rich markdown analysis (AI-assistable moments, skill gaps, etc.)
+    Pass 2: Structured JSON extraction for education CSV
+
+    Args:
+        video_path: Path to the MP4 video file.
+        task_description: The user's stated task from the filename.
+        video_id: Identifier for logging.
+
+    Returns:
+        Dict with:
+            "markdown": str -- full Pass 1 response
+            "sections": dict -- parsed E-H sections
+            "structured": dict -- Pass 2 JSON for education CSV
+            "is_useful": bool -- True if education quality check passed
+            "rejection_reason": str -- Why it was rejected (if is_useful=False)
+        None on failure.
+    """
+    _ensure_configured()
+
+    if not os.path.isfile(video_path):
+        print(f"[ERROR] Video file not found: {video_path}")
+        return None
+
+    client = _get_client()
+    video_file = None
+
+    try:
+        # --- Upload video ---
+        video_file = _upload_video(video_path, video_id)
+
+        # --- Pass 1: Education analysis ---
+        print(f"  Education Pass 1: Analyzing training opportunities...")
+        prompt = EDUCATION_ANALYSIS_PROMPT.format(task_description=task_description)
+
+        markdown_text = _call_gemini(
+            client=client,
+            contents=[video_file, prompt],
+            video_id=video_id,
+            pass_name="Education Pass 1",
+            use_json=False,
+        )
+
+        if not markdown_text:
+            return None
+
+        sections = _parse_education_markdown_response(markdown_text)
+
+        # --- Pass 2: Structured extraction ---
+        print(f"  Education Pass 2: Extracting structured education data...")
+        extraction_prompt = EDUCATION_EXTRACTION_PROMPT.format(analysis_markdown=markdown_text)
+
+        json_text = _call_gemini(
+            client=client,
+            contents=[extraction_prompt],
+            video_id=video_id,
+            pass_name="Education Pass 2",
+            use_json=True,
+        )
+
+        structured = _parse_education_json_response(json_text, video_id) if json_text else _empty_education_structured()
+
+        # --- Education Quality Check ---
+        quality_check = _check_education_quality(structured)
+
+        if not quality_check["is_useful"]:
+            print(f"  Education quality check FAILED: {quality_check['reason']}")
+            return {
+                "markdown": markdown_text,
+                "sections": sections,
+                "structured": structured,
+                "is_useful": False,
+                "rejection_reason": quality_check["reason"],
+            }
+
+        print(f"  Education quality check PASSED")
+        return {
+            "markdown": markdown_text,
+            "sections": sections,
+            "structured": structured,
+            "is_useful": True,
+            "rejection_reason": "",
+        }
+
+    except (TimeoutError, RuntimeError, ValueError) as e:
+        print(f"[ERROR] {e}")
+        return None
+
+    finally:
+        # Clean up uploaded file
+        if video_file:
+            try:
+                client.files.delete(name=video_file.name)
+            except Exception:
+                pass
+
+
 if __name__ == "__main__":
     import sys
 
