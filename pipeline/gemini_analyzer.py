@@ -157,6 +157,123 @@ Return ONLY the JSON object, no additional text."""
 
 
 # =============================================================================
+# Education Prompts
+# =============================================================================
+
+# Education Pass 1: Training-focused analysis (produces markdown sections E-H)
+EDUCATION_ANALYSIS_PROMPT = """You are an AI training needs analyst.
+Your job is to watch how this person completes their work task and identify opportunities for AI-assisted learning, skill development, and productivity improvement.
+
+INPUT:
+I will provide a screen recording of a person completing a work task.
+The user described this task as: "{task_description}"
+Watch the entire recording carefully, paying attention to hesitation, repeated actions, manual steps, and missed shortcuts.
+---
+
+OUTPUT THE FOLLOWING SECTIONS (STRICT):
+
+### E) AI-Assistable Moments
+
+Identify specific moments in the recording where the user could have used an AI tool (GitHub Copilot, Google Gemini, ChatGPT, Microsoft Copilot, etc.) to speed up or improve what they were doing.
+
+For each moment:
+- Describe what the user was doing at that point
+- Which AI tool would help and how
+- Provide a concrete example prompt the user could have typed
+- Estimate time saved (seconds or minutes)
+
+Be specific about the moment — reference what was on screen, not generic advice.
+
+### F) Missed Tool Features
+
+What built-in features of the applications they used went unused that would have helped? Consider:
+- Keyboard shortcuts they didn't use
+- Built-in functions (Excel formulas, Gmail filters, browser extensions, etc.)
+- Features they navigated past or used inefficiently
+- Copy-paste patterns that suggest they don't know about find-and-replace, autofill, etc.
+
+For each missed feature:
+- The application and feature name
+- What the user did instead (the manual approach)
+- How the feature would have helped
+- Difficulty to learn: Easy / Medium / Hard
+
+### G) Skill Assessment
+
+Based on how they approached the task, assess their comfort level:
+
+1. **Technology comfort level**: beginner / intermediate / advanced
+   - What specific behaviors support this assessment?
+   - Did they navigate confidently or hesitate?
+   - Did they use any shortcuts or advanced features?
+
+2. **AI readiness level**: beginner / intermediate / advanced
+   - Have they likely used AI tools before? What signals suggest this?
+   - How receptive would they likely be to AI-assisted workflows?
+
+3. **Primary skill gaps**: List the top 3 skill gaps observed, ranked by impact on their daily productivity.
+
+### H) Personalized Learning Recommendations
+
+Based on everything observed:
+
+1. **Recommended training modules** — List 3-5 specific training topics this person should learn, ordered by priority. Be specific (not "learn Excel" but "Excel VLOOKUP and pivot tables for cross-referencing data").
+
+2. **Example AI prompts to practice** — Write 2-3 concrete AI prompts drawn from their actual task that they could try right now. These should be copy-paste ready.
+
+3. **Quick wins** — What's the single easiest thing this person could learn that would save them the most time? Explain in 1-2 sentences.
+
+4. **Time savings estimate** — If this person completed the recommended training, how much time could they save on this specific task? Classify as: minimal (<10%), moderate (10-30%), significant (30-50%), transformative (>50%)."""
+
+
+# Education Pass 2: Structured extraction (produces JSON matching education CSV schema)
+EDUCATION_EXTRACTION_PROMPT = """You are a data extraction assistant. Given the following education-focused workflow analysis, extract structured data as a JSON object.
+
+EDUCATION ANALYSIS:
+---
+{analysis_markdown}
+---
+
+Return a JSON object with exactly these fields:
+
+{{
+    "workflow_summary": "A concise 1-2 sentence plain-language description of what the user was doing",
+    "ai_assistable_moments": ["List of objects, each with 'moment', 'ai_tool', 'example_prompt', 'time_saved'"],
+    "missed_tool_features": ["List of objects, each with 'app', 'feature', 'manual_approach', 'difficulty'"],
+    "manual_effort_description": "Prose description of what took the most manual effort and why",
+    "skill_level": "One of: beginner, intermediate, advanced (overall AI tool readiness)",
+    "skill_level_reasoning": "Brief explanation of why this skill level was assigned",
+    "learning_category": "One of: spreadsheet_skills, email_productivity, document_creation, data_lookup_synthesis, cross_system_data_movement, communication_tools, approval_processes, other",
+    "recommended_training_modules": ["List of specific training module names/topics"],
+    "example_ai_prompt": "A single concrete example prompt the user could try for their specific task, copy-paste ready",
+    "time_save_opportunity": "One of: minimal, moderate, significant, transformative"
+}}
+
+Guidelines for skill_level:
+- beginner: Hesitant with technology, no shortcuts used, basic navigation only, likely never used AI tools
+- intermediate: Comfortable with apps but misses advanced features, may have heard of AI tools but doesn't use them regularly
+- advanced: Uses keyboard shortcuts, advanced features, may already use some AI tools, adapts quickly
+
+Guidelines for learning_category — choose the BEST fit:
+- spreadsheet_skills: Excel, Google Sheets, data manipulation, formulas
+- email_productivity: Outlook, Gmail, email management, calendar
+- document_creation: Word, Google Docs, report writing, formatting
+- data_lookup_synthesis: Research, cross-referencing, data gathering from multiple sources
+- cross_system_data_movement: Moving data between applications, copy-paste across systems
+- communication_tools: Teams, Slack, video calls, messaging
+- approval_processes: Routing documents for approval, signatures, review workflows
+- other: Doesn't fit any of the above
+
+Guidelines for time_save_opportunity:
+- minimal: Less than 10% time savings possible
+- moderate: 10-30% time savings possible
+- significant: 30-50% time savings possible
+- transformative: More than 50% time savings possible
+
+Return ONLY the JSON object, no additional text."""
+
+
+# =============================================================================
 # Video Upload
 # =============================================================================
 
