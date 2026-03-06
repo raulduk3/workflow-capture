@@ -15,7 +15,21 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from config import ANALYSES_DIR, ANALYSIS_CSV, CONVERSION_CSV, CSV_COLUMNS, MISRECORDINGS_DIR, OUTPUT_DIR, PROCESSING_LOG, REJECTED_LOG
+from config import (
+    ANALYSES_DIR,
+    ANALYSIS_CSV,
+    CONVERSION_CSV,
+    CSV_COLUMNS,
+    EDUCATION_ANALYSES_DIR,
+    EDUCATION_CSV,
+    EDUCATION_CSV_COLUMNS,
+    EDUCATION_PROCESSING_LOG,
+    EDUCATION_REJECTED_LOG,
+    MISRECORDINGS_DIR,
+    OUTPUT_DIR,
+    PROCESSING_LOG,
+    REJECTED_LOG,
+)
 
 
 def ensure_output_dir() -> None:
@@ -23,6 +37,7 @@ def ensure_output_dir() -> None:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(os.path.join(OUTPUT_DIR, "reports"), exist_ok=True)
     os.makedirs(ANALYSES_DIR, exist_ok=True)
+    os.makedirs(EDUCATION_ANALYSES_DIR, exist_ok=True)
     os.makedirs(MISRECORDINGS_DIR, exist_ok=True)
 
 
@@ -467,6 +482,209 @@ def get_csv_stats(csv_path: str = ANALYSIS_CSV) -> dict:
     return stats
 
 
+# =============================================================================
+# Education CSV Functions
+# =============================================================================
+
+
+def initialize_education_csv(csv_path: str = EDUCATION_CSV) -> None:
+    """Create the education CSV file with headers if it doesn't exist."""
+    ensure_output_dir()
+
+    if not os.path.isfile(csv_path):
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(EDUCATION_CSV_COLUMNS)
+        print(f"[INFO] Created education CSV: {csv_path}")
+
+
+def append_education_row(
+    row_data: dict,
+    csv_path: str = EDUCATION_CSV,
+) -> bool:
+    """
+    Append a single education analysis row to the education CSV.
+
+    Args:
+        row_data: Dictionary with keys matching EDUCATION_CSV_COLUMNS.
+        csv_path: Path to the education CSV file.
+
+    Returns:
+        True if the row was written successfully.
+    """
+    initialize_education_csv(csv_path)
+
+    row_data.setdefault("processed_at", datetime.now().isoformat(timespec="seconds"))
+
+    row = []
+    for col in EDUCATION_CSV_COLUMNS:
+        value = row_data.get(col, "")
+        row.append(str(value) if value is not None else "")
+
+    try:
+        with open(csv_path, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(row)
+        return True
+    except OSError as e:
+        print(f"[ERROR] Could not append to education CSV: {e}")
+        return False
+
+
+def build_education_row(
+    parsed_metadata: dict,
+    video_metadata: dict,
+    education_structured: dict,
+    education_md_path: str = "",
+    mp4_path: str = "",
+) -> dict:
+    """
+    Merge all data sources into a single education row dict matching EDUCATION_CSV_COLUMNS.
+
+    Args:
+        parsed_metadata: From filename_parser.parse_filename()
+        video_metadata: From frame_extractor.get_video_metadata()
+        education_structured: From gemini_analyzer.analyze_video_education()["structured"]
+        education_md_path: Path to the saved education markdown file
+        mp4_path: Path to the converted MP4 file
+
+    Returns:
+        Dict with all EDUCATION_CSV_COLUMNS keys populated.
+    """
+    row = {}
+
+    # From filename parser
+    row["video_id"] = parsed_metadata.get("video_id", "")
+    row["username"] = parsed_metadata.get("username", "")
+    row["timestamp"] = parsed_metadata.get("timestamp", "")
+    row["machine_id"] = parsed_metadata.get("machine_id", "")
+    row["task_description"] = parsed_metadata.get("task_description", "")
+
+    # From video file
+    row["duration_sec"] = video_metadata.get("duration_sec", -1)
+
+    # From Gemini education analysis
+    if education_structured:
+        row["workflow_summary"] = education_structured.get("workflow_summary", "")
+        row["ai_assistable_moments"] = education_structured.get("ai_assistable_moments", "[]")
+        row["missed_tool_features"] = education_structured.get("missed_tool_features", "[]")
+        row["manual_effort_description"] = education_structured.get("manual_effort_description", "")
+        row["skill_level"] = education_structured.get("skill_level", "beginner")
+        row["skill_level_reasoning"] = education_structured.get("skill_level_reasoning", "")
+        row["learning_category"] = education_structured.get("learning_category", "other")
+        row["recommended_training_modules"] = education_structured.get("recommended_training_modules", "[]")
+        row["example_ai_prompt"] = education_structured.get("example_ai_prompt", "")
+        row["time_save_opportunity"] = education_structured.get("time_save_opportunity", "moderate")
+    else:
+        row["workflow_summary"] = ""
+        row["ai_assistable_moments"] = "[]"
+        row["missed_tool_features"] = "[]"
+        row["manual_effort_description"] = ""
+        row["skill_level"] = "beginner"
+        row["skill_level_reasoning"] = ""
+        row["learning_category"] = "other"
+        row["recommended_training_modules"] = "[]"
+        row["example_ai_prompt"] = ""
+        row["time_save_opportunity"] = "moderate"
+
+    # Metadata
+    row["source_path"] = parsed_metadata.get("source_path", "")
+    row["mp4_path"] = mp4_path
+    row["education_md_path"] = education_md_path
+    row["processed_at"] = datetime.now().isoformat(timespec="seconds")
+
+    return row
+
+
+def save_education_markdown(
+    video_id: str,
+    username: str,
+    task_description: str,
+    markdown_content: str,
+    analyses_dir: str = EDUCATION_ANALYSES_DIR,
+) -> str:
+    """
+    Save per-video education markdown analysis to a file.
+
+    Args:
+        video_id: Unique video identifier.
+        username: User who recorded the video.
+        task_description: The stated task.
+        markdown_content: Full education markdown from Gemini.
+        analyses_dir: Output directory for education markdown files.
+
+    Returns:
+        Path to the saved file.
+    """
+    os.makedirs(analyses_dir, exist_ok=True)
+
+    # Sanitize task description for filename
+    safe_task = re.sub(r'[^\w\s-]', '', task_description).strip()
+    safe_task = re.sub(r'[\s]+', '_', safe_task)[:50]
+
+    filename = f"{video_id}_{username}_{safe_task}_education.md"
+    filepath = os.path.join(analyses_dir, filename)
+
+    analyzed_at = datetime.now().isoformat(timespec="seconds")
+
+    header = f"""---
+video_id: {video_id}
+username: {username}
+task: {task_description}
+analysis_type: education
+analyzed_at: {analyzed_at}
+---
+
+# Education Analysis
+
+- User: {username}
+- Task: {task_description}
+- Video ID: {video_id}
+- Analyzed At: {analyzed_at}
+
+"""
+
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(header)
+            f.write(markdown_content.strip() + "\n")
+        return filepath
+    except OSError as e:
+        print(f"[ERROR] Could not save education markdown: {e}")
+        return ""
+
+
+def mark_education_rejected(video_id: str, reason: str = "") -> None:
+    """Append a video_id to the education rejected log with reason."""
+    ensure_output_dir()
+
+    try:
+        with open(EDUCATION_REJECTED_LOG, "a", encoding="utf-8") as f:
+            timestamp = datetime.now().isoformat(timespec="seconds")
+            f.write(f"{video_id}|{timestamp}|{reason}\n")
+    except OSError as e:
+        print(f"[ERROR] Could not write to education rejected log: {e}")
+
+
+def load_education_rejected_ids() -> set[str]:
+    """Load the set of education-rejected video IDs."""
+    rejected = set()
+
+    if not os.path.isfile(EDUCATION_REJECTED_LOG):
+        return rejected
+
+    try:
+        with open(EDUCATION_REJECTED_LOG, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split("|")
+                if parts:
+                    rejected.add(parts[0])
+    except OSError as e:
+        print(f"[WARN] Could not read education rejected log: {e}")
+
+    return rejected
+
+
 if __name__ == "__main__":
     print("CSV Manager - Status")
     print(f"  CSV path: {ANALYSIS_CSV}")
@@ -484,3 +702,10 @@ if __name__ == "__main__":
         print(f"  Date range: {stats['date_range']}")
     else:
         print("  CSV does not exist yet.")
+
+    print(f"\n  Education CSV path: {EDUCATION_CSV}")
+    print(f"  Education analyses dir: {EDUCATION_ANALYSES_DIR}")
+    edu_processed = load_processed_ids(EDUCATION_PROCESSING_LOG)
+    print(f"  Education processed IDs: {len(edu_processed)}")
+    edu_rejected = load_education_rejected_ids()
+    print(f"  Education rejected IDs: {len(edu_rejected)}")
