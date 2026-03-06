@@ -17,7 +17,10 @@
 #   .\Run-WorkflowPipeline.ps1 -SkipConversion       # Skip MP4 conversion
 #   .\Run-WorkflowPipeline.ps1 -MetadataOnly         # Skip Gemini analysis
 #   .\Run-WorkflowPipeline.ps1 -GenerateReport       # Include insights report
-#   .\.\Run-WorkflowPipeline.ps1 -User "username"      # Single user
+#   .\Run-WorkflowPipeline.ps1 -User "username"      # Single user
+#   .\Run-WorkflowPipeline.ps1 -Education            # Education analysis pass
+#   .\Run-WorkflowPipeline.ps1 -EducationReport      # Education aggregate report
+#   .\Run-WorkflowPipeline.ps1 -Education -User "username" -Limit 2  # Test education on 2 videos
 # =============================================================================
 
 param(
@@ -40,7 +43,13 @@ param(
     [switch]$DryRun = $false,
 
     [Parameter(Mandatory=$false)]
-    [int]$LogRetentionDays = 14
+    [int]$LogRetentionDays = 14,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$Education = $false,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$EducationReport = $false
 )
 
 $ErrorActionPreference = "Continue"
@@ -84,6 +93,8 @@ Write-Log "Pipeline:    $PipelineDir"
 if ($SkipConversion) { Write-Log "Stage 1:     SKIPPED (--SkipConversion)" }
 if ($MetadataOnly)   { Write-Log "Stage 2:     METADATA ONLY (no Gemini)" }
 if ($DryRun)         { Write-Log "Mode:        DRY RUN" }
+if ($Education)      { Write-Log "Mode:        EDUCATION ANALYSIS PASS" }
+if ($EducationReport){ Write-Log "Mode:        EDUCATION REPORT GENERATION" }
 if ($User)           { Write-Log "Filter:      User = $User" }
 if ($Limit -gt 0)    { Write-Log "Limit:       $Limit videos" }
 Write-Log "=========================================="
@@ -213,6 +224,8 @@ if (-not $pythonExe) {
     if ($DryRun) { $pyArgs += "--dry-run" }
     if ($MetadataOnly) { $pyArgs += "--metadata-only" }
     if ($GenerateReport) { $pyArgs += "--report" }
+    if ($Education) { $pyArgs += "--education" }
+    if ($EducationReport) { $pyArgs += "--education-report" }
 
     try {
         # Run with working directory set to pipeline folder
@@ -263,6 +276,8 @@ $health = @{
     success        = $overallSuccess
     skip_conversion = [bool]$SkipConversion
     metadata_only  = [bool]$MetadataOnly
+    education      = [bool]$Education
+    education_report = [bool]$EducationReport
     user_filter    = $User
     log_file       = (Join-Path $LogDir "pipeline_$(Get-Date -Format 'yyyy-MM-dd').log")
 } | ConvertTo-Json
