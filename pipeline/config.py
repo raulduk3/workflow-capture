@@ -129,6 +129,19 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = "gemini-2.0-flash"
 
 # =============================================================================
+# Education Analysis Settings
+# =============================================================================
+
+# Education analysis output paths (separate from automation pass)
+EDUCATION_CSV = os.path.join(OUTPUT_DIR, "workflow_education.csv")
+EDUCATION_ANALYSES_DIR = os.path.join(OUTPUT_DIR, "education_analyses")
+EDUCATION_PROCESSING_LOG = os.path.join(OUTPUT_DIR, "education_processed.log")
+EDUCATION_REJECTED_LOG = os.path.join(OUTPUT_DIR, "education_rejected.log")
+
+# Minimum video duration for education analysis (skip very short recordings)
+MIN_EDUCATION_DURATION_SEC = 30
+
+# =============================================================================
 # CSV Schema
 # =============================================================================
 
@@ -160,5 +173,33 @@ CSV_COLUMNS = [
     "source_path",
     "mp4_path",
     "analysis_md_path",
+    "processed_at",
+]
+
+# Education CSV schema: filename metadata + video metadata + education analysis
+EDUCATION_CSV_COLUMNS = [
+    # From filename (reuse)
+    "video_id",
+    "username",
+    "timestamp",
+    "machine_id",
+    "task_description",
+    # From video file (reuse)
+    "duration_sec",
+    # Education fields from Gemini
+    "workflow_summary",
+    "ai_assistable_moments",
+    "missed_tool_features",
+    "manual_effort_description",
+    "skill_level",
+    "skill_level_reasoning",
+    "learning_category",
+    "recommended_training_modules",
+    "example_ai_prompt",
+    "time_save_opportunity",
+    # Metadata
+    "source_path",
+    "mp4_path",
+    "education_md_path",
     "processed_at",
 ]
