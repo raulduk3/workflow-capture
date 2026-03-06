@@ -168,4 +168,13 @@ pipeline/*.pyc
 /reports/insights_*.md
 /reports/insights_*.pdf
 
+# Python virtual environment
+.venv/
+
+# Claude workspace settings
+.claude/
+
+# LaTeX temp files
+texput.log
+
 docs/
