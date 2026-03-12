@@ -457,6 +457,8 @@ def cluster_hierarchical(X, method="ward"):
             best_sil = s
             best_k = k
             best_labels = labels_k
+    if best_labels is None:
+        best_labels = fcluster(Z, t=best_k, criterion="maxclust")
     # Convert 1-indexed to 0-indexed
     best_labels = best_labels - 1
     return best_labels, best_sil, best_k, Z
