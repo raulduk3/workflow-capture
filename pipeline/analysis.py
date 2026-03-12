@@ -586,55 +586,58 @@ def fig_cluster_map(dfa, pca_2d, labels, explained):
     ax.set_title("Workflow Clusters (PCA Projection)")
     ax.legend(loc="best", framealpha=0.9)
     ax.grid(True, alpha=0.2)
-    fig.savefig(FIGS / "fig1_cluster_map.pdf")
-    plt.close(fig)
+    add_axis_padding(ax)
+    finalize_figure(fig, FIGS / "fig1_cluster_map.pdf")
 
 
 def fig_automation_distribution(df):
-    """Fig 2: Automation score histogram with density."""
-    dfa = df[df["username"] != "localutility"]
-    fig, ax = plt.subplots(figsize=(4.5, 3))
-    bins = [0, 0.3, 0.5, 0.7, 0.85, 1.0]
-    bin_labels = ["Low\n(0–0.3)", "Moderate\n(0.3–0.5)", "Medium\n(0.5–0.7)",
-                  "High\n(0.7–0.85)", "Very High\n(0.85–1.0)"]
-    counts, _, patches = ax.hist(dfa["automation_score"], bins=bins,
-                                 edgecolor="white", linewidth=0.8, color=PALETTE[1], alpha=0.85)
-    # Add count labels
-    for patch, count in zip(patches, counts):
-        if count > 0:
-            ax.text(patch.get_x() + patch.get_width() / 2, count + 0.3,
-                    f"{int(count)}", ha="center", va="bottom", fontsize=8, fontweight="bold")
-    ax.set_xticks([(bins[i] + bins[i+1]) / 2 for i in range(len(bins)-1)])
-    ax.set_xticklabels(bin_labels, fontsize=7)
+    """Fig 2: Automation score distribution using only observed score bands."""
+    dfa = filtered_analysis_df(df)
+    band_df = automation_band_summary(dfa["automation_score"])
+
+    fig, ax = plt.subplots(figsize=(max(4.5, 1.1 * len(band_df)), 3.2))
+    positions = np.arange(len(band_df))
+    bars = ax.bar(positions, band_df["count"], color=PALETTE[1], alpha=0.85,
+                  edgecolor="white", linewidth=0.8, width=0.72)
+
+    for bar, count in zip(bars, band_df["count"]):
+        ax.text(bar.get_x() + bar.get_width() / 2, count + 0.35,
+                f"{int(count)}", ha="center", va="bottom", fontsize=8, fontweight="bold")
+
+    suspect_count = int(identify_suspect_rows(dfa).sum())
+    ax.set_xticks(positions)
+    ax.set_xticklabels(band_df["label"], fontsize=7, rotation=28, ha="right")
     ax.set_ylabel("Number of Workflows")
-    ax.set_title("Automation Score Distribution")
-    ax.set_ylim(0, max(counts) + 3)
-    fig.savefig(FIGS / "fig2_automation_dist.pdf")
-    plt.close(fig)
+    title = "Automation Score Distribution"
+    if suspect_count:
+        title += f"\n({suspect_count} suspect Gemini rows retained but audited separately)"
+    ax.set_title(title)
+    ax.set_ylim(0, float(band_df["count"].max()) + 3)
+    ax.grid(True, axis="y", alpha=0.15)
+    finalize_figure(fig, FIGS / "fig2_automation_dist.pdf")
 
 
 def fig_user_category_heatmap(df):
     """Fig 3: Users × workflow categories heatmap."""
-    dfa = df[df["username"] != "localutility"]
+    dfa = filtered_analysis_df(df)
     pivot = dfa.groupby(["full_name", "workflow_category"]).size().unstack(fill_value=0)
     # Sort by total recordings
     pivot = pivot.loc[pivot.sum(axis=1).sort_values(ascending=True).index]
 
-    fig, ax = plt.subplots(figsize=(6, 4.5))
+    fig, ax = plt.subplots(figsize=(max(6.2, pivot.shape[1] * 1.05), max(4.5, pivot.shape[0] * 0.38)))
     sns.heatmap(pivot, annot=True, fmt="d", cmap="YlOrRd", linewidths=0.5,
                 ax=ax, cbar_kws={"label": "Count"})
     ax.set_xlabel("Workflow Category")
     ax.set_ylabel("")
     ax.set_title("User × Category Activity Matrix")
-    plt.xticks(rotation=35, ha="right")
-    fig.savefig(FIGS / "fig3_user_category_heatmap.pdf")
-    plt.close(fig)
+    plt.xticks(rotation=30, ha="right")
+    finalize_figure(fig, FIGS / "fig3_user_category_heatmap.pdf")
 
 
 def fig_sop_vs_score(df):
     """Fig 4: SOP complexity vs automation score scatter."""
-    dfa = df[df["username"] != "localutility"]
-    fig, ax = plt.subplots(figsize=(4.5, 3.5))
+    dfa = filtered_analysis_df(df)
+    fig, ax = plt.subplots(figsize=(5.2, 3.8))
 
     # Size by duration, color by category
     categories = dfa["workflow_category"].unique()
@@ -656,26 +659,26 @@ def fig_sop_vs_score(df):
     ax.set_xlabel("SOP Step Count")
     ax.set_ylabel("Automation Score")
     ax.set_title("Complexity vs. Automation Potential")
-    ax.legend(loc="upper left", fontsize=5, ncol=2, framealpha=0.8)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.2), fontsize=6, ncol=3, framealpha=0.85)
     ax.grid(True, alpha=0.15)
-    fig.savefig(FIGS / "fig4_sop_vs_score.pdf")
-    plt.close(fig)
+    add_axis_padding(ax, x_pad=0.05, y_pad=0.06)
+    finalize_figure(fig, FIGS / "fig4_sop_vs_score.pdf")
 
 
 def fig_app_frequency(df):
     """Fig 5: Top applications bar chart."""
-    dfa = df[df["username"] != "localutility"]
+    dfa = filtered_analysis_df(df)
     app_counts = dfa["primary_app"].value_counts().head(12)
 
     # Average automation score per app
     app_scores = dfa.groupby("primary_app")["automation_score"].mean()
 
-    fig, ax = plt.subplots(figsize=(5, 3.5))
-    colors = [plt.cm.RdYlGn(app_scores.get(app, 0.5)) for app in app_counts.index]
+    fig, ax = plt.subplots(figsize=(6.1, max(3.5, 0.42 * len(app_counts) + 1.4)))
+    colors = [matplotlib.colormaps["RdYlGn"](app_scores.get(app, 0.5)) for app in app_counts.index]
     bars = ax.barh(range(len(app_counts)), app_counts.values, color=colors, edgecolor="white")
 
     ax.set_yticks(range(len(app_counts)))
-    ax.set_yticklabels(app_counts.index, fontsize=7)
+    ax.set_yticklabels([wrapped_label(app, 18) for app in app_counts.index], fontsize=7)
     ax.set_xlabel("Number of Workflows")
     ax.set_title("Primary Applications (colored by avg. automation score)")
     ax.invert_yaxis()
@@ -685,20 +688,20 @@ def fig_app_frequency(df):
         score = app_scores.get(app, 0)
         ax.text(count + 0.2, i, f"{score:.2f}", va="center", fontsize=6, color="gray")
 
-    fig.savefig(FIGS / "fig5_app_frequency.pdf")
-    plt.close(fig)
+    ax.set_xlim(0, app_counts.max() + 2)
+    finalize_figure(fig, FIGS / "fig5_app_frequency.pdf")
 
 
 def fig_recording_timeline(df):
     """Fig 6: Recording timeline scatter by user."""
-    dfa = df[df["username"] != "localutility"].copy()
+    dfa = filtered_analysis_df(df).copy()
     dfa["date_dt"] = pd.to_datetime(dfa["date"])
 
     # Sort users by first recording date
     user_order = dfa.groupby("full_name")["date_dt"].min().sort_values().index.tolist()
     user_y = {u: i for i, u in enumerate(user_order)}
 
-    fig, ax = plt.subplots(figsize=(5.5, 4))
+    fig, ax = plt.subplots(figsize=(6.4, max(4.2, 0.28 * len(user_order) + 1.8)))
 
     dept_colors = {
         "Project Accounting": PALETTE[0],
@@ -727,15 +730,16 @@ def fig_recording_timeline(df):
     from matplotlib.lines import Line2D
     handles = [Line2D([0], [0], marker="o", color="w", markerfacecolor=c, markersize=6, label=d)
                for d, c in dept_colors.items() if d in dfa["department"].values]
-    ax.legend(handles=handles, loc="upper left", fontsize=5, ncol=2, framealpha=0.8)
+    ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.16),
+              fontsize=6, ncol=3, framealpha=0.85)
     ax.grid(True, alpha=0.15, axis="x")
-    fig.savefig(FIGS / "fig6_timeline.pdf")
-    plt.close(fig)
+    add_axis_padding(ax, x_pad=0.02, y_pad=0.04)
+    finalize_figure(fig, FIGS / "fig6_timeline.pdf")
 
 
 def fig_action_cooccurrence(df):
     """Fig 7: Detected actions co-occurrence matrix."""
-    dfa = df[df["username"] != "localutility"]
+    dfa = filtered_analysis_df(df)
 
     # Count co-occurrences
     all_actions = set()
@@ -761,7 +765,7 @@ def fig_action_cooccurrence(df):
                 if a != b:
                     cooc[act_idx[b], act_idx[a]] += 1
 
-    fig, ax = plt.subplots(figsize=(6, 5))
+    fig, ax = plt.subplots(figsize=(max(6.2, n * 0.55 + 1.8), max(5.2, n * 0.5 + 1.6)))
     # Clean labels
     clean_labels = [a.replace("_", " ").replace("document review", "doc review")
                     for a in frequent_actions]
@@ -772,13 +776,12 @@ def fig_action_cooccurrence(df):
     plt.xticks(rotation=45, ha="right", fontsize=6)
     plt.yticks(fontsize=6)
     ax.set_title("Action Co-occurrence Matrix")
-    fig.savefig(FIGS / "fig7_action_cooccurrence.pdf")
-    plt.close(fig)
+    finalize_figure(fig, FIGS / "fig7_action_cooccurrence.pdf")
 
 
 def fig_department_profile(df):
     """Fig 8: Department-level aggregated radar/bar comparison."""
-    dfa = df[~df["username"].isin(["localutility"])].copy()
+    dfa = filtered_analysis_df(df).copy()
 
     dept_stats = dfa.groupby("department").agg(
         n_workflows=("video_id", "count"),
@@ -790,7 +793,8 @@ def fig_department_profile(df):
     dept_stats = dept_stats[dept_stats["department"] != "IT (Pipeline)"]
     dept_stats = dept_stats.sort_values("n_workflows", ascending=True)
 
-    fig, axes = plt.subplots(1, 3, figsize=(7, 3.5), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(8.2, max(3.8, 0.34 * len(dept_stats) + 1.8)),
+                             sharey=True, gridspec_kw={"wspace": 0.26})
 
     axes[0].barh(dept_stats["department"], dept_stats["n_workflows"], color=PALETTE[0])
     axes[0].set_xlabel("Workflows")
@@ -806,7 +810,7 @@ def fig_department_profile(df):
     axes[2].set_title("SOP Complexity")
 
     fig.suptitle("Department Profiles", fontsize=10, fontweight="bold")
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.17, right=0.98, bottom=0.15, top=0.83, wspace=0.3)
     fig.savefig(FIGS / "fig8_department_profiles.pdf")
     plt.close(fig)
 
@@ -831,33 +835,35 @@ def fig_elbow_silhouette(X, k_range, inertias, sil_scores):
     ax2.axvline(best_k, ls="--", color="red", alpha=0.5, label=f"Best k={best_k}")
     ax2.legend()
 
-    fig.tight_layout()
-    fig.savefig(FIGS / "fig9_elbow_silhouette.pdf")
-    plt.close(fig)
+    finalize_figure(fig, FIGS / "fig9_elbow_silhouette.pdf")
 
 
 def fig_category_breakdown(df):
     """Fig 10: Workflow category pie/donut chart."""
-    dfa = df[df["username"] != "localutility"]
+    dfa = filtered_analysis_df(df)
     cats = dfa["workflow_category"].value_counts()
 
-    fig, ax = plt.subplots(figsize=(4, 3.5))
-    wedges, texts, autotexts = ax.pie(
-        cats.values, labels=cats.index, autopct="%1.0f%%",
+    fig, ax = plt.subplots(figsize=(6.2, 3.8))
+    wedges, _, autotexts = ax.pie(
+        cats.values, labels=None,
+        autopct=lambda pct: f"{pct:.0f}%" if pct >= 4 else "",
         colors=PALETTE[:len(cats)], pctdistance=0.8,
+        startangle=90,
         wedgeprops=dict(width=0.5, edgecolor="white"),
         textprops={"fontsize": 7},
     )
     for t in autotexts:
         t.set_fontsize(6)
     ax.set_title("Workflow Category Distribution")
-    fig.savefig(FIGS / "fig10_category_breakdown.pdf")
-    plt.close(fig)
+    legend_labels = [f"{wrapped_label(cat, 18)} (n={count})" for cat, count in cats.items()]
+    ax.legend(wedges, legend_labels, loc="center left", bbox_to_anchor=(1.0, 0.5),
+              fontsize=7, framealpha=0.85)
+    finalize_figure(fig, FIGS / "fig10_category_breakdown.pdf")
 
 
 def fig_dendrogram(Z, dfa):
     """Fig 11: Hierarchical clustering dendrogram."""
-    fig, ax = plt.subplots(figsize=(7, 4.5))
+    fig, ax = plt.subplots(figsize=(max(7.5, len(dfa) * 0.13), 5.2))
     # Use task descriptions as labels (truncated)
     labels_text = [f"{r['full_name'][:12]}:{r['task_description'][:18]}"
                    for _, r in dfa.iterrows()]
@@ -867,8 +873,7 @@ def fig_dendrogram(Z, dfa):
     ax.set_ylabel("Distance")
     ax.set_title("Hierarchical Clustering Dendrogram (Ward Linkage)")
     ax.tick_params(axis="x", labelsize=4)
-    fig.savefig(FIGS / "fig11_dendrogram.pdf")
-    plt.close(fig)
+    finalize_figure(fig, FIGS / "fig11_dendrogram.pdf")
 
 
 def fig_dbscan_map(dfa, pca_2d, db_labels, explained):
@@ -891,8 +896,8 @@ def fig_dbscan_map(dfa, pca_2d, db_labels, explained):
     ax.set_title(f"DBSCAN Clusters ({n_clust} clusters, {n_noise} noise)")
     ax.legend(loc="best", framealpha=0.9, fontsize=7)
     ax.grid(True, alpha=0.2)
-    fig.savefig(FIGS / "fig12_dbscan_map.pdf")
-    plt.close(fig)
+    add_axis_padding(ax)
+    finalize_figure(fig, FIGS / "fig12_dbscan_map.pdf")
 
 
 def fig_gmm_probabilities(dfa, pca_2d, gmm_probas, gmm_labels, explained):
@@ -901,18 +906,18 @@ def fig_gmm_probabilities(dfa, pca_2d, gmm_probas, gmm_labels, explained):
     max_prob = gmm_probas.max(axis=1)
     for c in sorted(set(gmm_labels)):
         mask = gmm_labels == c
-        sc = ax.scatter(pca_2d[mask, 0], pca_2d[mask, 1],
-                        c=[PALETTE[c % len(PALETTE)]], s=45,
-                        alpha=max_prob[mask] * 0.8 + 0.2,
-                        edgecolors="white", linewidth=0.5,
-                        label=f"GMM {c} (n={mask.sum()})")
+        alpha_values = np.clip(max_prob[mask] * 0.8 + 0.2, 0.2, 1.0)
+        rgba = [(*PALETTE[c % len(PALETTE)], alpha) for alpha in alpha_values]
+        ax.scatter(pca_2d[mask, 0], pca_2d[mask, 1],
+                   c=rgba, s=45, edgecolors="white", linewidth=0.5,
+                   label=f"GMM {c} (n={mask.sum()})")
     ax.set_xlabel(f"PC1 ({explained[0]:.1%} var.)")
     ax.set_ylabel(f"PC2 ({explained[1]:.1%} var.)")
     ax.set_title("GMM Soft Clustering (opacity = assignment confidence)")
     ax.legend(loc="best", framealpha=0.9, fontsize=7)
     ax.grid(True, alpha=0.2)
-    fig.savefig(FIGS / "fig13_gmm_probabilities.pdf")
-    plt.close(fig)
+    add_axis_padding(ax)
+    finalize_figure(fig, FIGS / "fig13_gmm_probabilities.pdf")
 
 
 def fig_gmm_bic_aic(k_range, bics, aics):
@@ -927,8 +932,7 @@ def fig_gmm_bic_aic(k_range, bics, aics):
     ax.set_title("GMM Model Selection")
     ax.legend(fontsize=7)
     ax.grid(True, alpha=0.2)
-    fig.savefig(FIGS / "fig14_gmm_bic_aic.pdf")
-    plt.close(fig)
+    finalize_figure(fig, FIGS / "fig14_gmm_bic_aic.pdf")
 
 
 def fig_consensus_coassoc(coassoc, consensus_labels, dfa):
@@ -940,7 +944,7 @@ def fig_consensus_coassoc(coassoc, consensus_labels, dfa):
 
     fig, ax = plt.subplots(figsize=(6, 5))
     im = ax.imshow(coassoc_sorted, cmap="YlOrRd", vmin=0, vmax=1, aspect="auto")
-    plt.colorbar(im, ax=ax, label="Co-association Frequency")
+    fig.colorbar(im, ax=ax, label="Co-association Frequency", pad=0.02, fraction=0.046)
 
     # Draw cluster boundaries
     boundaries = np.where(np.diff(sorted_labels))[0] + 0.5
@@ -951,15 +955,15 @@ def fig_consensus_coassoc(coassoc, consensus_labels, dfa):
     ax.set_title("Consensus Co-Association Matrix")
     ax.set_xlabel("Workflow Index (sorted by cluster)")
     ax.set_ylabel("Workflow Index (sorted by cluster)")
-    fig.savefig(FIGS / "fig15_consensus_coassoc.pdf")
-    plt.close(fig)
+    finalize_figure(fig, FIGS / "fig15_consensus_coassoc.pdf")
 
 
 def fig_method_comparison(dfa, pca_2d, results_dict, explained):
     """Fig 16: Side-by-side comparison of all clustering methods."""
     methods = list(results_dict.keys())
     n_methods = len(methods)
-    fig, axes = plt.subplots(1, n_methods, figsize=(4 * n_methods, 3.5), squeeze=False)
+    fig, axes = plt.subplots(1, n_methods, figsize=(3.7 * n_methods, 3.8), squeeze=False,
+                             gridspec_kw={"wspace": 0.22})
     axes = axes[0]
 
     for ax, method_name in zip(axes, methods):
@@ -969,22 +973,22 @@ def fig_method_comparison(dfa, pca_2d, results_dict, explained):
             mask = labels == c
             if c == -1:
                 ax.scatter(pca_2d[mask, 0], pca_2d[mask, 1],
-                           c="gray", marker="x", s=20, alpha=0.5, label="Noise")
+                           c="gray", marker="x", s=20, alpha=0.5)
             else:
                 ax.scatter(pca_2d[mask, 0], pca_2d[mask, 1],
                            c=[PALETTE[c % len(PALETTE)]], s=30, alpha=0.7,
-                           edgecolors="white", linewidth=0.3, label=f"C{c}")
+                           edgecolors="white", linewidth=0.3)
         sil = results_dict[method_name].get("sil", -1)
         k = results_dict[method_name].get("k", "?")
         ax.set_title(f"{method_name}\nk={k}, sil={sil:.3f}" if sil > -1
                      else f"{method_name}\nk={k}", fontsize=8)
         ax.set_xlabel(f"PC1 ({explained[0]:.1%})", fontsize=7)
-        ax.legend(fontsize=5, loc="best", framealpha=0.7)
         ax.grid(True, alpha=0.15)
+        add_axis_padding(ax, x_pad=0.04, y_pad=0.04)
 
     axes[0].set_ylabel(f"PC2 ({explained[1]:.1%})", fontsize=7)
     fig.suptitle("Clustering Method Comparison (PCA Projection)", fontsize=10, fontweight="bold")
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.06, right=0.99, bottom=0.16, top=0.81, wspace=0.24)
     fig.savefig(FIGS / "fig16_method_comparison.pdf")
     plt.close(fig)
 
@@ -1005,7 +1009,8 @@ def fig_consensus_cluster_profiles(dfa, consensus_labels):
         normed[m] = (dfa[m] - mn) / rng
 
     n_clusters = len(set(consensus_labels))
-    fig, axes = plt.subplots(1, n_clusters, figsize=(3.5 * n_clusters, 3), squeeze=False)
+    fig, axes = plt.subplots(1, n_clusters, figsize=(3.8 * n_clusters, 3.4), squeeze=False,
+                             gridspec_kw={"wspace": 0.28})
     axes = axes[0]
 
     for c, ax in zip(sorted(set(consensus_labels)), axes):
@@ -1025,7 +1030,7 @@ def fig_consensus_cluster_profiles(dfa, consensus_labels):
                     f"{raw_mean:.1f}", ha="center", fontsize=5, color="gray")
 
     fig.suptitle("Consensus Cluster Profiles (normalized)", fontsize=10, fontweight="bold")
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.05, right=0.99, bottom=0.2, top=0.82, wspace=0.32)
     fig.savefig(FIGS / "fig17_consensus_profiles.pdf")
     plt.close(fig)
 
