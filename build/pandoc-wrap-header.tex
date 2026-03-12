@@ -1,14 +1,46 @@
+\usepackage{fontspec}
 \usepackage{array}
 \usepackage{booktabs}
+\usepackage{enumitem}
 \usepackage{etoolbox}
 \usepackage{longtable}
 \usepackage{microtype}
+\usepackage{needspace}
+\usepackage{newunicodechar}
+\usepackage{ragged2e}
 \usepackage{tabularx}
 
-\setlength{\emergencystretch}{2em}
-\setlength{\tabcolsep}{3pt}
-\renewcommand{\arraystretch}{1.1}
-\sloppy
+\setmainfont{Avenir Next}[Ligatures=TeX]
+\setsansfont{Avenir Next}[Ligatures=TeX]
+\setmonofont{Fira Code}[AutoFakeBold=1.8,AutoFakeSlant=0.15]
 
-\AtBeginEnvironment{longtable}{\small}
+\newfontfamily\unicodefallback{Apple Symbols}
+
+\newunicodechar{→}{{\unicodefallback →}}
+\newunicodechar{↔}{{\unicodefallback ↔}}
+
+\setlength{\emergencystretch}{3em}
+\setlength{\tabcolsep}{3pt}
+\setlength{\extrarowheight}{1pt}
+\renewcommand{\arraystretch}{1.12}
+\setlength{\parskip}{0.55em}
+\setlength{\parindent}{0pt}
+\setlength{\LTpre}{0.5em}
+\setlength{\LTpost}{0.5em}
+\clubpenalty=10000
+\widowpenalty=10000
+\displaywidowpenalty=10000
+\raggedbottom
+\setlist[itemize]{leftmargin=1.4em, itemsep=0.3em, topsep=0.5em, parsep=0pt, partopsep=0pt}
+\setlist[enumerate]{leftmargin=1.6em, itemsep=0.35em, topsep=0.55em, parsep=0pt, partopsep=0pt}
+
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0.3em}\setlength{\parskip}{0pt}}
+
+\pretocmd{\section}{\Needspace{10\baselineskip}}{}{}
+\pretocmd{\subsection}{\Needspace{8\baselineskip}}{}{}
+\pretocmd{\subsubsection}{\Needspace{6\baselineskip}}{}{}
+
+\AtBeginEnvironment{longtable}{\small\RaggedRight\setlength{\LTleft}{0pt}\setlength{\LTright}{0pt}}
 \AtBeginEnvironment{tabular}{\small}
+\AtBeginEnvironment{tabularx}{\small\RaggedRight}
