@@ -16,6 +16,7 @@ import ast
 import sys
 import hashlib
 import warnings
+import textwrap
 from pathlib import Path
 from collections import Counter
 
@@ -63,6 +64,15 @@ plt.rcParams.update({
     "savefig.pad_inches": 0.05,
 })
 PALETTE = sns.color_palette("Set2", 8)
+SUSPECT_PRIMARY_APPS = {"Workflow Capture", "Sessions", "Windows", "Unknown"}
+HALLUCINATION_PATTERNS = re.compile(r"NASDAQ|S&P 500|stock|bitcoin|crypto", re.IGNORECASE)
+AUTOMATION_BANDS = [
+    (0.00, 0.30, "Low"),
+    (0.30, 0.50, "Moderate"),
+    (0.50, 0.70, "Medium"),
+    (0.70, 0.85, "High"),
+    (0.85, 1.000001, "Very High"),
+]
 
 # ── Participant enrichment (from POC-Participants CSV) ───────────────────────
 PARTICIPANT_MAP = {
@@ -97,6 +107,118 @@ def safe_parse_list(val):
         # Try stripping quotes
         val = str(val).strip("[]")
         return [x.strip().strip('"').strip("'") for x in val.split(",") if x.strip()]
+
+
+def filtered_analysis_df(df, exclude_suspect=False):
+    """Return the user-analysis subset, optionally excluding suspect Gemini rows."""
+    dfa = df[df["username"] != "localutility"].copy()
+    if exclude_suspect:
+        dfa = dfa.loc[~identify_suspect_rows(dfa)].copy()
+    return dfa
+
+
+def identify_suspect_rows(df):
+    """Flag rows with likely Gemini hallucination artifacts for reporting views."""
+    workflow_text = df.get("workflow_description", pd.Series(index=df.index, dtype="object")).fillna("")
+    return df["primary_app"].isin(SUSPECT_PRIMARY_APPS) | workflow_text.str.contains(HALLUCINATION_PATTERNS, na=False)
+
+
+def finalize_figure(fig, output_path, rect=None):
+    """Apply consistent spacing before saving publication figures."""
+    if rect is None:
+        fig.tight_layout(pad=1.0)
+    else:
+        fig.tight_layout(rect=rect, pad=1.0)
+    fig.savefig(output_path)
+    plt.close(fig)
+
+
+def add_axis_padding(ax, x_pad=0.05, y_pad=0.08):
+    """Expand axis limits slightly so markers and labels do not hug the frame."""
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    if np.isfinite([x0, x1]).all() and x1 > x0:
+        x_margin = (x1 - x0) * x_pad
+        ax.set_xlim(x0 - x_margin, x1 + x_margin)
+    if np.isfinite([y0, y1]).all() and y1 > y0:
+        y_margin = (y1 - y0) * y_pad
+        ax.set_ylim(y0 - y_margin, y1 + y_margin)
+
+
+def wrapped_label(value, width=16):
+    """Wrap long axis labels for compact layouts."""
+    return textwrap.fill(str(value), width=width, break_long_words=False)
+
+
+def latex_escape(value):
+    """Escape LaTeX-sensitive characters in generated table content."""
+    if pd.isna(value):
+        return "—"
+    text = str(value)
+    replacements = {
+        "\\": r"\textbackslash{}",
+        "&": r"\&",
+        "%": r"\%",
+        "$": r"\$",
+        "#": r"\#",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+        "~": r"\textasciitilde{}",
+        "^": r"\textasciicircum{}",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
+
+
+def latex_shorten(value, width):
+    """Shorten long text for table cells while preserving whole words."""
+    if pd.isna(value):
+        return "—"
+    text = " ".join(str(value).split())
+    if len(text) <= width:
+        return latex_escape(text)
+    return latex_escape(textwrap.shorten(text, width=width, placeholder="..."))
+
+
+def automation_band_summary(scores):
+    """Return non-empty automation score bands with boundary-aware binning."""
+    rows = []
+    for idx, (lower, upper, label) in enumerate(AUTOMATION_BANDS):
+        is_last = idx == len(AUTOMATION_BANDS) - 1
+        if is_last:
+            mask = scores.between(lower, upper, inclusive="both")
+        else:
+            mask = (scores >= lower) & (scores < upper)
+        count = int(mask.sum())
+        if count == 0:
+            continue
+        upper_display = "1.00" if is_last else f"{upper:.2f}"
+        rows.append({
+            "label": f"{label}\n({lower:.2f}–{upper_display})",
+            "midpoint": (lower + min(upper, 1.0)) / 2,
+            "count": count,
+            "lower": lower,
+            "upper": upper,
+        })
+    return pd.DataFrame(rows)
+
+
+def write_latex_table(output_path, column_spec, header_row, rows):
+    """Write a spaced LaTeX table fragment with wrapped paragraph columns."""
+    lines = [
+        r"{\small",
+        r"\renewcommand{\arraystretch}{1.18}",
+        r"\setlength{\tabcolsep}{5pt}",
+        rf"\begin{{tabular}}{{{column_spec}}}",
+        r"\toprule",
+        header_row,
+        r"\midrule",
+    ]
+    lines.extend(rows)
+    lines += [r"\bottomrule", r"\end{tabular}", r"}"]
+    output_path.write_text("\n".join(lines))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
