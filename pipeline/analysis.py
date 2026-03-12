@@ -285,8 +285,7 @@ def integrity_audit(df):
             flags.append(f"WARNING: analysis CSV has {len(df)} rows but sessions shows {n_analyzed} analyzed")
 
     # ── Hallucination flags ──
-    suspect_apps = {"Workflow Capture", "Sessions", "Windows", "Unknown"}
-    suspect_rows = df[df["primary_app"].isin(suspect_apps)]
+    suspect_rows = df[df["primary_app"].isin(SUSPECT_PRIMARY_APPS)]
     if len(suspect_rows) > 0:
         for _, r in suspect_rows.iterrows():
             flags.append(
@@ -309,9 +308,8 @@ def integrity_audit(df):
         flags.append(f"PIPELINE TEST: {len(lu)} 'localutility' recordings (exclude from user analysis)")
 
     # Descriptions mentioning NASDAQ, stock tickers, etc. (likely hallucinated)
-    halluc_patterns = re.compile(r"NASDAQ|S&P 500|stock|bitcoin|crypto", re.IGNORECASE)
     for _, r in df.iterrows():
-        if halluc_patterns.search(str(r.get("workflow_description", ""))):
+        if HALLUCINATION_PATTERNS.search(str(r.get("workflow_description", ""))):
             flags.append(
                 f"HALLUCINATION? Description mentions financial markets: "
                 f"{r['username']}/{r['video_id']}: '{r['workflow_description'][:80]}...'"
