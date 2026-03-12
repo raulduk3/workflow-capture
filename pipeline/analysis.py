@@ -1045,7 +1045,7 @@ def generate_latex_tables(df, dfa_clustered, cluster_summaries):
     tables_dir.mkdir(exist_ok=True)
 
     # ── Table 1: User participation ──
-    dfa = df[df["username"] != "localutility"]
+    dfa = filtered_analysis_df(df)
     user_stats = dfa.groupby(["full_name", "department"]).agg(
         n=("video_id", "count"),
         avg_score=("automation_score", "mean"),
@@ -1056,59 +1056,51 @@ def generate_latex_tables(df, dfa_clustered, cluster_summaries):
     user_stats["total_min"] = (user_stats["total_min"] / 60).round(1)
     user_stats = user_stats.sort_values("n", ascending=False)
 
-    lines = [
-        r"\begin{tabular}{llrrrrl}",
-        r"\toprule",
-        r"\textbf{Participant} & \textbf{Dept.} & \textbf{N} & \textbf{Avg Score} & \textbf{Avg SOP} & \textbf{Min.} & \textbf{Top App} \\",
-        r"\midrule",
-    ]
+    participant_rows = []
     for _, r in user_stats.iterrows():
-        dept_short = r["department"][:12]
-        lines.append(
-            f"{r['full_name']} & {dept_short} & {r['n']} & {r['avg_score']:.2f} & "
-            f"{r['avg_sop']:.0f} & {r['total_min']} & {r['top_app']} \\\\"
+        participant_rows.append(
+            f"{latex_escape(r['full_name'])} & {latex_shorten(r['department'], 18)} & {r['n']} & {r['avg_score']:.2f} & "
+            f"{r['avg_sop']:.0f} & {r['total_min']:.1f} & {latex_shorten(r['top_app'], 24)} \\\\" 
         )
-    lines += [r"\bottomrule", r"\end{tabular}"]
-    (tables_dir / "tab_participants.tex").write_text("\n".join(lines))
+    write_latex_table(
+        tables_dir / "tab_participants.tex",
+        r"@{}p{2.4cm}p{2.2cm}rrrp{1.2cm}p{2.8cm}@{}",
+        r"\textbf{Participant} & \textbf{Dept.} & \textbf{N} & \textbf{Avg Score} & \textbf{Avg SOP} & \textbf{Min.} & \textbf{Top App} \\",
+        participant_rows,
+    )
 
     # ── Table 2: Cluster summary ──
-    lines = [
-        r"\begin{tabular}{clrrll}",
-        r"\toprule",
-        r"\textbf{Cluster} & \textbf{Category} & \textbf{N} & \textbf{Avg Score} & \textbf{Top App} & \textbf{Top Actions} \\",
-        r"\midrule",
-    ]
+    cluster_rows = []
     for c, s in sorted(cluster_summaries.items()):
-        actions_str = ", ".join(s["top_actions"][:3])
-        lines.append(
-            f"{c} & {s['top_category']} & {s['n']} & {s['avg_score']:.2f} & "
-            f"{s['top_app']} & {actions_str} \\\\"
+        actions_str = ", ".join(s["top_actions"][:3]) if s["top_actions"] else "—"
+        cluster_rows.append(
+            f"{c} & {latex_shorten(s['top_category'], 22)} & {s['n']} & {s['avg_score']:.2f} & "
+            f"{latex_shorten(s['top_app'], 22)} & {latex_shorten(actions_str, 36)} \\\\" 
         )
-    lines += [r"\bottomrule", r"\end{tabular}"]
-    (tables_dir / "tab_clusters.tex").write_text("\n".join(lines))
+    write_latex_table(
+        tables_dir / "tab_clusters.tex",
+        r"@{}cp{2.6cm}rrp{2.1cm}p{4.1cm}@{}",
+        r"\textbf{Cluster} & \textbf{Category} & \textbf{N} & \textbf{Avg Score} & \textbf{Top App} & \textbf{Top Actions} \\",
+        cluster_rows,
+    )
 
     # ── Table 3: Top automation candidates ──
     top_auto = dfa.nlargest(15, "automation_score")[
         ["full_name", "task_description", "primary_app", "automation_score",
          "sop_step_count", "top_automation_candidate"]
     ].copy()
-    top_auto["task_description"] = top_auto["task_description"].str[:30]
-    top_auto["top_automation_candidate"] = top_auto["top_automation_candidate"].str[:30]
-
-    lines = [
-        r"\begin{tabular}{llrlrl}",
-        r"\toprule",
-        r"\textbf{User} & \textbf{Task} & \textbf{Score} & \textbf{App} & \textbf{SOP} & \textbf{Top Candidate} \\",
-        r"\midrule",
-    ]
+    auto_rows = []
     for _, r in top_auto.iterrows():
-        tac = r["top_automation_candidate"] if pd.notna(r["top_automation_candidate"]) else "—"
-        lines.append(
-            f"{r['full_name']} & {r['task_description']} & {r['automation_score']:.2f} & "
-            f"{r['primary_app']} & {r['sop_step_count']:.0f} & {tac} \\\\"
+        auto_rows.append(
+            f"{latex_escape(r['full_name'])} & {latex_shorten(r['task_description'], 34)} & {r['automation_score']:.2f} & "
+            f"{latex_shorten(r['primary_app'], 20)} & {r['sop_step_count']:.0f} & {latex_shorten(r['top_automation_candidate'], 34)} \\\\" 
         )
-    lines += [r"\bottomrule", r"\end{tabular}"]
-    (tables_dir / "tab_top_automation.tex").write_text("\n".join(lines))
+    write_latex_table(
+        tables_dir / "tab_top_automation.tex",
+        r"@{}p{2.1cm}p{4.0cm}rp{1.9cm}rp{4.0cm}@{}",
+        r"\textbf{User} & \textbf{Task} & \textbf{Score} & \textbf{App} & \textbf{SOP} & \textbf{Top Candidate} \\",
+        auto_rows,
+    )
 
     # ── Table 4: Deep-dive target workflows ──
     # High score + high SOP = best candidates for tool-building
@@ -1118,21 +1110,18 @@ def generate_latex_tables(df, dfa_clustered, cluster_summaries):
         ["full_name", "department", "task_description", "automation_score",
          "sop_step_count", "workflow_category", "primary_app"]
     ].copy()
-    top_impact["task_description"] = top_impact["task_description"].str[:35]
-
-    lines = [
-        r"\begin{tabular}{lllrrl}",
-        r"\toprule",
-        r"\textbf{User} & \textbf{Dept.} & \textbf{Task} & \textbf{Score} & \textbf{Steps} & \textbf{Category} \\",
-        r"\midrule",
-    ]
+    impact_rows = []
     for _, r in top_impact.iterrows():
-        lines.append(
-            f"{r['full_name']} & {r['department'][:10]} & {r['task_description']} & "
-            f"{r['automation_score']:.2f} & {r['sop_step_count']:.0f} & {r['workflow_category']} \\\\"
+        impact_rows.append(
+            f"{latex_escape(r['full_name'])} & {latex_shorten(r['department'], 18)} & {latex_shorten(r['task_description'], 38)} & "
+            f"{r['automation_score']:.2f} & {r['sop_step_count']:.0f} & {latex_shorten(r['workflow_category'], 26)} \\\\" 
         )
-    lines += [r"\bottomrule", r"\end{tabular}"]
-    (tables_dir / "tab_deep_dive.tex").write_text("\n".join(lines))
+    write_latex_table(
+        tables_dir / "tab_deep_dive.tex",
+        r"@{}p{2.0cm}p{2.0cm}p{4.4cm}rrp{2.7cm}@{}",
+        r"\textbf{User} & \textbf{Dept.} & \textbf{Task} & \textbf{Score} & \textbf{Steps} & \textbf{Category} \\",
+        impact_rows,
+    )
 
     print(f"  → Generated 4 table fragments in {tables_dir}")
 
@@ -1285,12 +1274,6 @@ def main():
     # ── Method comparison table for LaTeX ──
     print("\n[8/8] Generating clustering comparison table...")
     tables_dir = FIGS.parent / "tables"
-    lines = [
-        r"\begin{tabular}{lrrp{4.5cm}}",
-        r"\toprule",
-        r"\textbf{Method} & \textbf{k} & \textbf{Silhouette} & \textbf{Notes} \\",
-        r"\midrule",
-    ]
     method_notes = {
         "K-Means": "Centroid-based; assumes spherical clusters",
         "DBSCAN": f"{n_db_noise} noise points identified as outliers",
@@ -1298,12 +1281,19 @@ def main():
         "GMM": "Soft assignments; BIC-selected components",
         "Consensus": "Co-association of all methods; final labels",
     }
+    comparison_rows = []
     for name, r in results.items():
         sil_str = f"{r['sil']:.3f}" if r['sil'] > -1 else "N/A"
         note = method_notes.get(name, "")
-        lines.append(f"{name} & {r['k']} & {sil_str} & {note} \\\\")
-    lines += [r"\bottomrule", r"\end{tabular}"]
-    (tables_dir / "tab_clustering_comparison.tex").write_text("\n".join(lines))
+        comparison_rows.append(
+            f"{latex_escape(name)} & {r['k']} & {sil_str} & {latex_shorten(note, 56)} \\\\" 
+        )
+    write_latex_table(
+        tables_dir / "tab_clustering_comparison.tex",
+        r"@{}p{2.2cm}rrp{7.2cm}@{}",
+        r"\textbf{Method} & \textbf{k} & \textbf{Silhouette} & \textbf{Notes} \\",
+        comparison_rows,
+    )
     print("  → tab_clustering_comparison.tex")
 
     # ── Summary stats for report ──
