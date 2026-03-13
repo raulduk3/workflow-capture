@@ -178,3 +178,5 @@ pipeline/*.pyc
 texput.log
 
 docs/
+
+raw_data/
