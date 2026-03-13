@@ -5,6 +5,7 @@
   "main": "dist/main/index.js",
   "scripts": {
     "build": "tsc && npm run copy-assets",
+    "build:training-packet": "sh ./scripts/build-complete-training-packet.sh",
     "copy-assets": "shx mkdir -p dist/renderer && shx cp src/renderer/index.html dist/renderer/ && shx cp src/renderer/styles.css dist/renderer/",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",

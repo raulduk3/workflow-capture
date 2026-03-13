@@ -62,6 +62,23 @@ npm run dist:win
 npm run dist:mac
 ```
 
+### Build Training Packets
+The Bulley & Andrews combined training packet is assembled from the source markdown files in `docs/reports`.
+
+```bash
+# Build using the latest available end-user and per-user source files
+npm run build:training-packet
+
+# Build a specific dated packet
+npm run build:training-packet -- --packet-date 2026-03-13 --end-user-date 2026-03-13 --per-user-date 2026-03-12
+```
+
+Requirements:
+- `pandoc`
+- `xelatex`
+
+Outputs are written to `docs/reports/BULLEY_ANDREWS_COMPLETE_TRAINING_PACKET_<date>.md` and `.pdf`.
+
 ## Deployment
 
 ### Network Configuration
